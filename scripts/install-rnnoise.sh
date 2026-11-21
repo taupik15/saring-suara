@@ -52,8 +52,15 @@ JS
 # Bundle the VAD-capable mono worklet. Keep the old worklet/main assets
 # for rollback and to satisfy unchanged Fix 1.7 workflow checks.
 cp scripts/rnnoise-vad-worklet-entry.js "$TMP/rnnoise-vad-entry.js"
+# The shiguredo Emscripten glue also contains require("path") / require("fs")
+# guarded by its Node-only runtime branch. During a browser build, esbuild
+# must not try to resolve those Node builtins. Keep them external: the guarded
+# branch never runs in a browser AudioWorklet. Do NOT use --platform=node.
 "$TMP/node_modules/.bin/esbuild" "$TMP/rnnoise-vad-entry.js" \
-  --bundle --platform=browser --format=iife --target=es2020 --outfile=vendor-rnnoise/rnnoise-vad-worklet.js
+  --bundle --platform=browser --format=iife --target=es2020 \
+  --external:path --external:fs --external:crypto --external:os \
+  --external:worker_threads --external:child_process --external:node:* \
+  --outfile=vendor-rnnoise/rnnoise-vad-worklet.js
 cp "$PACKAGE/rnnoise.wasm" vendor-rnnoise/rnnoise.wasm
 cp "$TMP/node_modules/@sapphi-red/web-noise-suppressor/LICENSE" vendor-rnnoise/LICENSE-MIT 2>/dev/null || true
 cat > vendor-rnnoise/NOTICE.txt <<'NOTE'
