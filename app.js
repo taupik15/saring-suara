@@ -380,11 +380,11 @@ async function startCenterPreview(source,autoRNNoise=false){
   const rnStatus=document.createElement('small');rnStatus.setAttribute('role','status');
   rnStatus.textContent='RNNoise real-time mati. Tidak memakai FFmpeg atau mengekspor seluruh audio.';
   rnSection.append(rnLabel,rnMixLabel,rnStatus);
-  // Gate is independent of RNNoise's VAD. The current RNNoise wrapper does not expose VAD scores.
+  // Smart gate receives VAD from RNNoise's running denoiser; energy is fallback.
   const gateSection=document.createElement('div');gateSection.className='ai-controls';
-  const gateTitle=document.createElement('strong');gateTitle.textContent='Gerbang suara adaptif · eksperimental';
+  const gateTitle=document.createElement('strong');gateTitle.textContent='Gerbang suara pintar · RNNoise VAD / energi';
   const gateInfo=document.createElement('small');gateInfo.setAttribute('role','status');
-  gateInfo.textContent='Mengatur jeda dialog berdasarkan perubahan energi suara, bukan deteksi AI RNNoise. Dimatikan secara default.';
+  gateInfo.textContent='RNNoise live aktif → VAD AI; RNNoise mati → energi adaptif. Gate mati secara default.';
   const gateMount=document.createElement('div');
   gateSection.append(gateTitle,gateInfo,gateMount);
   controls.append(text,centerText,centerCaution,vocalText,vocalNote,compare,aiSection,rnSection,gateSection);
@@ -424,7 +424,8 @@ async function startCenterPreview(source,autoRNNoise=false){
       thresholdDb:clampNumber(saved.thresholdDb,3,20,8),
       depthDb:clampNumber(saved.depthDb,-60,-6,-28),
       holdMs:clampNumber(saved.holdMs,0,500,200),
-      releaseMs:clampNumber(saved.releaseMs,20,500,150)};
+      releaseMs:clampNumber(saved.releaseMs,20,500,150),
+      vadThreshold:clampNumber(saved.vadThreshold,0.2,0.9,0.5)};
     const created=await window.SpeechGate.create(ctx,params);
     if(audioContext!==ctx) {
       try{created.node.disconnect();created.node.port?.close?.();}catch(_){}return;
@@ -437,14 +438,14 @@ async function startCenterPreview(source,autoRNNoise=false){
     const setParams=created.setParams.bind(created);
     created.setParams=updates=>{
       setParams(updates);
-      const {thresholdDb,depthDb,holdMs,releaseMs}=created.params;
-      try{localStorage.setItem(gateSettingsKey,JSON.stringify({thresholdDb,depthDb,holdMs,releaseMs}));}catch(_){}
+      const {thresholdDb,depthDb,holdMs,releaseMs,vadThreshold}=created.params;
+      try{localStorage.setItem(gateSettingsKey,JSON.stringify({thresholdDb,depthDb,holdMs,releaseMs,vadThreshold}));}catch(_){}
     };
     window.SpeechGate.mountControls(gateMount,created);
     voiceGain.disconnect(limiter);
     voiceGain.connect(created.node);
     created.node.connect(limiter);
-    gateInfo.textContent='Gate siap. Centang untuk meredam jeda dialog. VAD RNNoise belum terhubung; deteksinya berbasis energi.';
+    gateInfo.textContent='Gate siap. Aktifkan RNNoise live dan centang gate untuk menggunakan VAD AI. Tanpa RNNoise, energi adaptif otomatis.';
     player.addEventListener('seeking',()=>{try{created.node.port.postMessage({type:'reset'});}catch(_){}});
   }
   prepareGate().catch(error=>{if(audioContext===ctx)gateInfo.textContent='Gate tidak bisa diaktifkan: '+(error?.message||error);});
@@ -473,7 +474,8 @@ async function startCenterPreview(source,autoRNNoise=false){
     rnnoiseController=window.SaringRNNoise.create({
       context:ctx,upstream:compressor,downstream:voiceGain,
       onStatus:message=>{if(audioContext===ctx)rnStatus.textContent=message;},
-      onFailure:()=>{if(audioContext===ctx){rnSwitch.checked=false;rnMixLabel.hidden=true;}}
+      onFailure:()=>{if(audioContext===ctx){rnSwitch.checked=false;rnMixLabel.hidden=true;speechGate?.setVad(null);}},
+      onVad:score=>{if(audioContext===ctx)speechGate?.setVad(score);}
     });
     rnnoiseController.setLevel(defaults.rnnoiseMix);
     rnSwitch.onchange=()=>{

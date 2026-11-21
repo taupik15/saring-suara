@@ -29,12 +29,17 @@ class SpeechGate extends AudioWorkletProcessor {
         this.floor = Infinity;
         this.warmup = Math.round(1.5 * sampleRate);
         this.holdLeft = 0;
+        this.vadTime = -1;
+        this.vad = 0;
         this.gain = 1;
         this.bufs = [];
         this.w = 0;
-      } else if (m.type === 'vad') {
-        this.vad = m.value;
+      } else if (m.type === 'vad' && Number.isFinite(m.value)) {
+        this.vad = Math.max(0, Math.min(1, m.value));
         this.vadTime = currentTime;
+      } else if (m.type === 'vadClear') {
+        this.vadTime = -1;
+        this.vad = 0;
       }
     };
   }
@@ -86,7 +91,7 @@ class SpeechGate extends AudioWorkletProcessor {
     this.es += (sum / n - this.es) * this.kE;
     const es = this.es;
 
-    const vadFresh = currentTime - this.vadTime < 0.1;
+    const vadFresh = this.vadTime >= 0 && currentTime - this.vadTime < 0.18;
     let speech = vadFresh
       ? this.vad > this.p.vadThreshold
       : es > 1e-7 && es > this.floor * this.thr;
@@ -97,7 +102,8 @@ class SpeechGate extends AudioWorkletProcessor {
       if (es > 1e-8) {
         this.floor = Number.isFinite(this.floor) ? this.floor + 0.03 * (es - this.floor) : es;
       }
-      speech = true;
+      // Only energy-based detection requires this warmup. AI VAD can be used immediately.
+      if (!vadFresh) speech = true;
     } else if (!Number.isFinite(this.floor)) {
       this.floor = Math.max(1e-8, es);
       speech = true;
@@ -141,6 +147,8 @@ class SpeechGate extends AudioWorkletProcessor {
         open: open,
         gainDb: 20 * Math.log10(Math.max(gain, 1e-5)),
         ratioDb: 10 * Math.log10(Math.max(es, 1e-10) / Math.max(this.floor, 1e-10)),
+        detector: vadFresh ? 'vad' : 'energy',
+        vadScore: vadFresh ? this.vad : null,
       });
     }
     return true;

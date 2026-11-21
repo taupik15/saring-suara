@@ -1,4 +1,4 @@
-/* Fix 1.7: RNNoise in the live video audio graph. No FFmpeg or full-file decode.
+/* Fix 1.9: RNNoise live + real neural speech probability (VAD). No FFmpeg.
  * Runtime is self-hosted from vendor-rnnoise/ by GitHub Pages.
  * Source audio/video stays local; only WASM/JS assets are loaded.
  * RNNoise reduces noise, not guaranteed music separation.
@@ -7,16 +7,23 @@
 (() => {
   const ROOT = './vendor-rnnoise/';
   const WASM = ROOT + 'rnnoise.wasm';
-  const WORKLET = ROOT + 'rnnoise-worklet.js';
-  const MAIN = ROOT + 'rnnoise-main.js';
+  const WORKLET = ROOT + 'rnnoise-vad-worklet.js';
   const DELAY_SAMPLES = 640; // library's mono AudioWorklet delay: 640 samples at 48kHz
-  function create({context, upstream, downstream, onStatus, onFailure}) {
+  function create({context, upstream, downstream, onStatus, onFailure, onVad}) {
     let node=null, delay=null, dryGain=null, wetGain=null, hub=null;
     let destroyed=false, wanted=false, connected=false, aborter=null;
     let generation=0, mix=0.25, pending=null, workletAdded=null;
     const tell = msg => {if (!destroyed) onStatus?.(msg);};
+    function clearVad() {try{onVad?.(null);}catch(_) {}}
+    function dispose(used) {
+      if(!used)return;
+      try{used.port.postMessage({type:'destroy'});}catch(_){}
+      try{used.disconnect();}catch(_){}
+      used.onprocessorerror=null;
+      try{used.port.close();}catch(_){}
+    }
     function release() {
-      if(node) {try{node.destroy();}catch(_){} try{node.disconnect();}catch(_){} node.onprocessorerror=null;node=null;}
+      if(node) {dispose(node);node=null;}
       for(const n of [delay,dryGain,wetGain,hub]) {try{n?.disconnect();}catch(_){} }
       delay=dryGain=wetGain=hub=null;
     }
@@ -26,6 +33,7 @@
       release();
       upstream.connect(downstream);
       connected=false;
+      clearVad();
     }
     function setMix(v) {
       mix=Math.max(0,Math.min(1,Number(v)||0));
@@ -52,7 +60,12 @@
       setMix(mix);
       connected=true;
       node.onprocessorerror=()=>fail(Error('AudioWorklet RNNoise terhenti.'));
-      tell('RNNoise terhubung ke pemutar video. Efeknya mengikuti suara saat video berjalan; musik mungkin masih terdengar.');
+      node.port.onmessage=({data})=>{
+        if(data?.type==='vad' && Number.isFinite(data.value) && connected && wanted){
+          try{onVad?.(Math.max(0,Math.min(1,data.value)));}catch(_){}
+        }else if(data?.type==='error') fail(Error(data.message||'RNNoise VAD error.'));
+      };
+      tell('RNNoise VAD aktif. Deteksi bicara dikirim ke Speech Gate; audio video tetap real-time.');
     }
     function fail(error) {
       if(destroyed)return;
@@ -64,24 +77,44 @@
     }
     async function start(current) {
       const abort=new AbortController();aborter=abort;
+      let candidate=null;
       try {
-        if(context.sampleRate!==48000) throw Error('RNNoise live membutuhkan AudioContext 48 kHz (sekarang '+context.sampleRate+' Hz).');
+        if(context.sampleRate!==48000) throw Error('RNNoise VAD membutuhkan 48 kHz (sekarang '+context.sampleRate+' Hz).');
         if(!context.audioWorklet||typeof AudioWorkletNode==='undefined') throw Error('Safari tidak menyediakan AudioWorklet.');
-        tell('Memuat RNNoise-WASM lokal untuk video…');
+        tell('Memuat RNNoise dan deteksi bicara (VAD) lokal…');
         if(!workletAdded) workletAdded=context.audioWorklet.addModule(WORKLET).catch(error=>{workletAdded=null;throw error;});
-        const [{RnnoiseWorkletNode}] = await Promise.all([import(MAIN), workletAdded]);
-        if(typeof RnnoiseWorkletNode!=='function') throw Error('Modul RNNoise tidak cocok.');
-        const response=await fetch(WASM,{signal:abort.signal});
-        if(!response.ok)throw Error(response.status===404?'Aset RNNoise belum terpasang di GitHub Pages. Jalankan Deploy Saring Suara + GTCRN & RNNoise.':'RNNoise WASM HTTP '+response.status);
+        const responsePromise=fetch(WASM,{signal:abort.signal});
+        const [response]=await Promise.all([responsePromise,workletAdded]);
+        if(!response.ok)throw Error(response.status===404?'Aset RNNoise tidak tersedia di Pages. Jalankan ulang workflow build.':'RNNoise WASM HTTP '+response.status);
         const binary=await response.arrayBuffer();
         if(!binary.byteLength||!WebAssembly.validate(binary))throw Error('RNNoise WASM tidak valid.');
         if(!wanted||destroyed||current!==generation)return;
-        const ready=new RnnoiseWorkletNode(context,{wasmBinary:binary,maxChannels:1});
-        if(!wanted||destroyed||current!==generation){ready.destroy();ready.disconnect();return;}
+        candidate=new AudioWorkletNode(context,'saring-rnnoise-vad',{
+          numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1],
+          channelCount:1,channelCountMode:'explicit',
+          processorOptions:{wasmBinary:binary}
+        });
+        await new Promise((resolve,reject)=>{
+          const timer=setTimeout(()=>reject(Error('RNNoise VAD tidak siap dalam 20 detik.')),20000);
+          const cleanup=()=>{clearTimeout(timer);abort.signal.removeEventListener('abort',cancel);};
+          const cancel=()=>{cleanup();reject(Error('RNNoise dibatalkan.'));};
+          candidate.port.onmessage=({data})=>{
+            if(data?.type==='ready') {cleanup();resolve();}
+            else if(data?.type==='error') {cleanup();reject(Error(data.message||'RNNoise VAD tidak dapat dimuat.'));}
+          };
+          candidate.onprocessorerror=()=>{cleanup();reject(Error('RNNoise AudioWorklet terhenti saat inisialisasi.'));};
+          abort.signal.addEventListener('abort',cancel,{once:true});
+        });
+        if(!wanted||destroyed||current!==generation)return;
+        const ready=candidate;candidate=null;
         connect(ready);
       } catch(e) {
         if(wanted&&!destroyed&&current===generation)fail(e);
-      } finally {if(aborter===abort)aborter=null;if(current===generation)pending=null;}
+      } finally {
+        if(candidate)dispose(candidate);
+        if(aborter===abort)aborter=null;
+        if(current===generation)pending=null;
+      }
     }
     function enable(value) {
       if(destroyed)return;
@@ -97,9 +130,9 @@
       if(destroyed)return;
       wanted=false;generation++;aborter?.abort();
       try{upstream.disconnect();}catch(_){}
-      release();destroyed=true;connected=false;
+      release();destroyed=true;connected=false;clearVad();
     }
-    return {enable,setLevel(value){setMix(Math.max(0,Math.min(100,Number(value)||0))/100);},reset(){/* 10 ms tail only; no full reset needed on seek */},destroy,get active(){return connected;}};
+    return {enable,setLevel(value){setMix(Math.max(0,Math.min(100,Number(value)||0))/100);},reset(){try{node?.port.postMessage({type:'reset'});}catch(_){}clearVad();},destroy,get active(){return connected;}};
   }
   window.SaringRNNoise=Object.freeze({create});
 })();

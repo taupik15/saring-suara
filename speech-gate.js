@@ -7,9 +7,8 @@
  *   gate.node.connect(audioCtx.destination);
  *   SpeechGate.mountControls(document.querySelector('#kontrol-gate'), gate);
  *
- * Kalau wrapper RNNoise mengembalikan probabilitas bicara (VAD) per frame,
- * kirim dengan gate.setVad(nilai 0..1). Tanpa itu, gerbang memakai detektor
- * energi pita suara dengan noise floor adaptif.
+ * Fix 1.9: RNNoise live mengirim VAD nyata melalui gate.setVad(0..1).
+ * Saat RNNoise mati, kembali ke deteksi energi adaptif.
  */
 (function (global) {
   'use strict';
@@ -65,6 +64,7 @@
       },
       setVad(value) {
         if (Number.isFinite(value)) node.port.postMessage({ type: 'vad', value: Math.max(0, Math.min(1, value)) });
+        else node.port.postMessage({ type: 'vadClear' });
       },
     };
     node.port.onmessage = (e) => {
@@ -94,7 +94,7 @@
     box.appendChild(toggleLabel);
 
     const caution = document.createElement('small');
-    caution.textContent = 'Deteksi energi adaptif, bukan VAD asli RNNoise. Musik yang naik-turun bisa dianggap dialog. Matikan gate bila kata terpotong.';
+    caution.textContent = 'Ketika RNNoise live aktif, gate memakai probabilitas bicara AI (VAD). Tanpa RNNoise, memakai energi adaptif. VAD masih bisa salah; matikan gate bila kata terpotong.';
     box.appendChild(caution);
 
     const status = document.createElement('div');
@@ -121,7 +121,8 @@
       box.appendChild(wrap);
     }
 
-    row('Ambang bicara', 'thresholdDb', 3, 20, 1, 'dB di atas noise floor');
+    row('Ambang energi (cadangan)', 'thresholdDb', 3, 20, 1, 'dB di atas noise floor');
+    row('Ambang VAD RNNoise', 'vadThreshold', 0.2, 0.9, 0.05, 'probabilitas');
     row('Peredaman saat diam', 'depthDb', -60, -6, 1, 'dB');
     row('Tahan setelah bicara', 'holdMs', 0, 500, 10, 'ms');
     row('Waktu menutup', 'releaseMs', 20, 500, 10, 'ms');
@@ -129,7 +130,7 @@
     box.appendChild(status);
     gate.onMeter = (m) => {
       status.textContent =
-        'Gerbang: ' + (m.open ? 'terbuka' : 'tertutup') + ' · ' + m.gainDb.toFixed(1) + ' dB';
+        'Gerbang: ' + (m.open ? 'terbuka' : 'tertutup') + ' · ' + m.gainDb.toFixed(1) + ' dB · ' + (m.detector==='vad' ? 'RNNoise VAD ' + Math.round(m.vadScore*100)+'%' : 'energi adaptif');
     };
     container.appendChild(box);
     return box;
