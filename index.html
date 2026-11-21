@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Saring Suara · Fix 1.5</title>
+<title>Saring Suara · Fix 1.5.1</title>
 <style>
 *{box-sizing:border-box}body{margin:0;background:#eef2e9;color:#182d28;font:1rem/1.5 system-ui,-apple-system,sans-serif}
 main{max-width:720px;margin:auto;padding:28px 18px 60px}header{font-weight:800;letter-spacing:.04em}
@@ -21,7 +21,7 @@ footer,.note,small{font-size:.88rem;color:#486157}.note{margin:8px 0;padding:10p
 </style>
 </head>
 <body><main>
-<header>◉ &nbsp; Saring Suara <small>Fix 1.5</small></header>
+<header>◉ &nbsp; Saring Suara <small>Fix 1.5.1</small></header>
 <h1>Ambil suaranya.<br>Redam musiknya.</h1>
 <p>Putar video langsung dengan filter stereo, peredaman musik tengah, pengatur dialog −12 sampai +12 dB, dan AI DeepFilterNet3 opsional. File media tetap di perangkat.</p>
 <section>
@@ -59,5 +59,5 @@ footer,.note,small{font-size:.88rem;color:#486157}.note{margin:8px 0;padding:10p
 <progress hidden></progress>
 <div id="result"></div>
 </section>
-<footer>Fix 1.5: AI DeepFilterNet3 hanya dimuat jika diaktifkan. Model/runtime dapat memerlukan internet saat pertama dipakai; file media tetap diproses di browser, tanpa upload. Untuk sepenuhnya offline, pasang aset AI lokal lewat skrip yang disertakan. Jika AI gagal, filter biasa terus bekerja. Performa dan kualitas AI di Safari iPhone 13 belum terverifikasi. Resume dan kontrol dB dari Fix 1.4 tetap ada.</footer>
+<footer>Fix 1.5.1: model AI harus terpasang di vendor-ai/ melalui GitHub Actions. Safari tidak lagi mengambil model dari CDN lain saat video diputar; media tetap lokal. Jika aset AI tidak tersedia atau terjadi error, filter stereo tetap berjalan. Performa dan kualitas AI di Safari iPhone 13 belum terverifikasi. Resume dan kontrol dB dari Fix 1.4 tetap ada.</footer>
 </main><script src="ai-filter.js"></script><script src="app.js"></script></body></html>
