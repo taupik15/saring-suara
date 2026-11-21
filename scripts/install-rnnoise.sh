@@ -6,15 +6,23 @@ for exe in npm node python3; do command -v "$exe" >/dev/null || exit 1; done
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 npm install --prefix "$TMP" --ignore-scripts --no-save --no-audit --no-fund \
-  esbuild@0.25.12 '@sapphi-red/web-noise-suppressor@0.4.1'
+  esbuild@0.25.12 '@sapphi-red/web-noise-suppressor@0.4.1' \
+  '@shiguredo/rnnoise-wasm@2022.2.0'
 PACKAGE="$TMP/node_modules/@sapphi-red/web-noise-suppressor/dist"
 test -s "$PACKAGE/rnnoise.wasm"
 test -s "$PACKAGE/rnnoise/workletProcessor.js"
 test -s "$PACKAGE/index.js"
+# web-noise-suppressor distributes without declaring rnnoise-wasm as an npm
+# dependency. The compatibility patch and VAD entry both import it directly.
+RNNOISE_BACKEND="$TMP/node_modules/@shiguredo/rnnoise-wasm/dist/rnnoise.mjs"
+if [ ! -s "$RNNOISE_BACKEND" ]; then
+  echo 'RNNoise backend missing after npm install (@shiguredo/rnnoise-wasm@2022.2.0).' >&2
+  exit 1
+fi
 # npm does not apply the upstream project's pnpm patch. Add the exact
 # loadBinary bridge required to instantiate RNNoise using bytes supplied
 # from the main thread (AudioWorklet cannot fetch extra files reliably).
-python3 - "$TMP/node_modules/@shiguredo/rnnoise-wasm/dist/rnnoise.mjs" <<'PY_FIX'
+python3 - "$RNNOISE_BACKEND" <<'PY_FIX'
 from pathlib import Path
 import sys
 path=Path(sys.argv[1]); src=path.read_text()
