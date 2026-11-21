@@ -23,7 +23,7 @@ function savedControls() {
   const s=jsonFromStorage(settingsKey)||{};
   return {stereo:clampNumber(s.stereo,0,100,85),
     center:clampNumber(s.center,0,100,35),
-    vocal:clampNumber(s.vocal,0,12,4)};
+    vocal:clampNumber(s.vocal,-12,12,4)};
 }
 function saveControls(values) {
   try {localStorage.setItem(settingsKey,JSON.stringify(values));} catch (_) {}
@@ -336,14 +336,14 @@ async function startCenterPreview(source){
     'Musik dan dialog yang benar-benar tumpang tindih tidak dapat dipisahkan sempurna tanpa model AI.';
   // Post-filter vocal enhancement. It never reintroduces the unfiltered input.
   const vocalText=document.createElement('label');
-  vocalText.textContent='Perkuat dialog / vokal setelah musik diredam: ';
+  vocalText.textContent='Level dialog / vokal setelah musik diredam (−12 hingga +12 dB): ';
   const vocalBoost=document.createElement('input');vocalBoost.type='range';
-  vocalBoost.min='0';vocalBoost.max='12';vocalBoost.step='1';
+  vocalBoost.min='-12';vocalBoost.max='12';vocalBoost.step='1';
   vocalBoost.value=String(defaults.vocal);
-  const vocalValue=document.createElement('span');vocalValue.textContent='+'+defaults.vocal+' dB';
+  const vocalValue=document.createElement('span');vocalValue.textContent=(defaults.vocal>0?'+':'')+defaults.vocal+' dB';
   vocalText.append(vocalBoost,vocalValue);
   const vocalNote=document.createElement('small');
-  vocalNote.textContent='Penguat bekerja SETELAH filter musik. Jika masih ada musik yang lolos, musik tersebut bisa ikut menguat. Kompresor membatasi lonjakan volume, tetapi jangan memakai volume HP terlalu tinggi.';
+  vocalNote.textContent='Atur volume hasil filter: nilai negatif memperkecil, 0 dB netral, nilai positif memperkuat. Karena ini bukan AI, sisa musik yang lolos juga ikut berubah volumenya. Pembatas lonjakan tetap aktif.';
   const compare=document.createElement('label');
   const original=document.createElement('input');original.type='checkbox';
   compare.append(original,document.createTextNode(' Bandingkan campuran tanpa peredaman (mono, masih melalui EQ)'));
@@ -366,7 +366,7 @@ async function startCenterPreview(source){
   limiter.attack.value=0.003;limiter.release.value=0.16;
   const applyVocalBoost=()=>{
     const db=Number(vocalBoost.value);
-    vocalValue.textContent='+'+db+' dB';
+    vocalValue.textContent=(db>0?'+':'')+db+' dB';
     voiceGain.gain.setTargetAtTime(original.checked?1:Math.pow(10,db/20),ctx.currentTime,0.025);
     presence.gain.setTargetAtTime(original.checked?2:2+db/4,ctx.currentTime,0.025);
   };
