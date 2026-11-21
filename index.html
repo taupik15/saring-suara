@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Saring Suara · Fix 1.2</title>
+<title>Saring Suara · Fix 1.3</title>
 <style>
 *{box-sizing:border-box}body{margin:0;background:#eef2e9;color:#182d28;font:1rem/1.5 system-ui,-apple-system,sans-serif}
 main{max-width:720px;margin:auto;padding:28px 18px 60px}header{font-weight:800;letter-spacing:.04em}
@@ -15,18 +15,19 @@ button,a{display:inline-block;padding:12px 18px;color:white;background:#21594a;b
 button:disabled{opacity:.5}button#cancel{background:#a53f34}select{width:100%;padding:12px;margin:8px 0;font:inherit;border-radius:9px}
 progress,audio,video{display:block;width:100%;margin:14px 0;max-height:70vh}progress{height:8px}
 footer,.note,small{font-size:.88rem;color:#486157}.note{margin:8px 0;padding:10px 12px;background:#eef5ee;border-radius:9px}
-.live-controls{display:grid;gap:12px;padding:14px;background:#f2f6f2;border-radius:12px}.live-controls label{display:block;font-size:.96rem}.live-controls input[type=range]{display:block;width:100%;margin:12px 0 4px}.live-controls label:last-child{display:flex;gap:8px;align-items:start}
+.live-controls{display:grid;gap:12px;padding:14px;background:#f2f6f2;border-radius:12px}.live-controls label{display:block;font-size:.96rem}.live-controls input[type=range]{display:block;width:100%;margin:12px 0 4px}.live-controls label:last-child{display:flex;gap:8px;align-items:start}.resume-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.resume-actions button{padding:9px 13px}
 #status{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.94rem;font-weight:550;margin:12px 0}
 [hidden]{display:none!important}p{margin:10px 0 18px}
 </style>
 </head>
 <body><main>
-<header>◉ &nbsp; Saring Suara <small>Fix 1.2</small></header>
+<header>◉ &nbsp; Saring Suara <small>Fix 1.3</small></header>
 <h1>Ambil suaranya.<br>Redam musiknya.</h1>
-<p>Putar video langsung dengan peredaman stereo dan filter adaptif untuk musik yang bertahan di tengah. Seluruh proses lokal, tanpa upload file.</p>
+<p>Putar video langsung dengan peredaman musik, penguat dialog, dan penanda posisi otomatis jika browser refresh. Semua lokal tanpa unggah video.</p>
 <section>
 <label for="file">File sumber</label>
 <input id="file" type="file" accept="audio/*,video/*,.mkv,.m4a,.mov">
+<p id="resumeInfo" class="note" hidden></p>
 <fieldset id="options">
 <label for="stem">Pilih mode</label>
 <select id="stem">
@@ -58,5 +59,5 @@ footer,.note,small{font-size:.88rem;color:#486157}.note{margin:8px 0;padding:10p
 <progress hidden></progress>
 <div id="result"></div>
 </section>
-<footer>Fix 1.2: AudioWorklet langsung dengan peredaman spektral stereo dan musik tengah. Tanpa mengunggah file atau memuat AI berat di iPhone. Hasil bergantung pada audio, dan pemisahan dialog dari musik tidak dijamin sempurna. Mode ekspor dan HTDemucs desktop tetap menggunakan berkas proyek Fix 1.</footer>
+<footer>Fix 1.3: Simpan posisi tontonan dan pengaturan di browser; setelah refresh, pilih lagi file yang sama. Penguat dialog bekerja setelah filter, tetapi tidak dapat menghapus musik yang tersisa. AudioWorklet tetap bekerja langsung dengan peredaman spektral stereo dan musik tengah. Tanpa mengunggah file atau memuat AI berat di iPhone. Hasil bergantung pada audio, dan pemisahan dialog dari musik tidak dijamin sempurna. Mode ekspor dan HTDemucs desktop tetap menggunakan berkas proyek Fix 1.</footer>
 </main><script src="app.js"></script></body></html>

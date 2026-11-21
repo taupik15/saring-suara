@@ -6,7 +6,122 @@ const bar=document.querySelector('progress');
 const isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||
   (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 let activeWorker=null, rejectActive=null, currentURL=null, audioContext=null, centerNode=null, generation=0, running=false;
+let detachPlayback=null;
 const stateKey='saring-suara-fix1-last-stage';
+
+// Local checkpoints contain only file metadata, position and slider values.
+// Browsers cannot automatically re-open a local file after a reload.
+const playbackKey='saring-suara-playback-fix13';
+const settingsKey='saring-suara-controls-fix13';
+function jsonFromStorage(key) {
+  try {return JSON.parse(localStorage.getItem(key)||'null');} catch (_) {return null;}
+}
+function clampNumber(value,min,max,fallback) {
+  return Number.isFinite(value)?Math.max(min,Math.min(max,value)):fallback;
+}
+function savedControls() {
+  const s=jsonFromStorage(settingsKey)||{};
+  return {stereo:clampNumber(s.stereo,0,100,85),
+    center:clampNumber(s.center,0,100,35),
+    vocal:clampNumber(s.vocal,0,12,4)};
+}
+function saveControls(values) {
+  try {localStorage.setItem(settingsKey,JSON.stringify(values));} catch (_) {}
+}
+function checkpoint() {
+  const c=jsonFromStorage(playbackKey);
+  if(!c||typeof c.name!=='string'||!Number.isFinite(c.position)||c.position<3||
+    !Number.isFinite(c.duration)||c.duration<=0||c.position>=c.duration-3||
+    !Number.isFinite(c.updated)||Date.now()-c.updated>90*24*3600*1000) return null;
+  return c;
+}
+function sameSource(saved,source) {
+  return !!saved&&!!source&&saved.name===source.name&&saved.size===source.size&&
+    (!saved.modified||!source.lastModified||saved.modified===source.lastModified);
+}
+function clockTime(seconds) {
+  const n=Math.floor(Math.max(0,seconds));
+  const h=Math.floor(n/3600),m=Math.floor(n%3600/60),s=n%60;
+  return (h?h+':':'')+String(m).padStart(h?2:1,'0')+':'+String(s).padStart(2,'0');
+}
+function showResumeInfo() {
+  const item=$('resumeInfo');
+  if(!item)return;
+  const saved=checkpoint(),source=file.files[0];
+  item.hidden=!saved;
+  if(!saved)return;
+  if(!source) item.textContent='Posisi terakhir '+clockTime(saved.position)+' pada '+saved.name+
+    ' tersimpan. Pilih ulang file yang sama setelah refresh.';
+  else if(sameSource(saved,source)) item.textContent='Posisi '+clockTime(saved.position)+
+    ' ditemukan. Pilih mode pemutaran dan tekan Jalankan untuk menampilkan tombol Lanjutkan.';
+  else item.textContent='Posisi tersimpan untuk '+saved.name+' ('+clockTime(saved.position)+
+    '). Pilih file itu kembali untuk melanjutkan.';
+}
+// Attach to live players, not exported files. Resume requires choosing the same
+// local file again, and never starts automatically at the old position.
+function attachPlayback(player,source,mode,host) {
+  const saved=checkpoint();
+  const canResume=sameSource(saved,source);
+  let lastWrite=0,ended=false;
+  const save=(force=false)=>{
+    if(ended||!Number.isFinite(player.currentTime)||player.currentTime<0||
+       !Number.isFinite(player.duration)||player.duration<=0)return;
+    const now=Date.now();
+    if(!force&&now-lastWrite<4000)return;
+    lastWrite=now;
+    if(player.currentTime>=player.duration-3){
+      try {localStorage.removeItem(playbackKey);} catch (_) {}
+      showResumeInfo();
+      return;
+    }
+    try {localStorage.setItem(playbackKey,JSON.stringify({
+      name:source.name,size:source.size,modified:source.lastModified||0,
+      position:player.currentTime,duration:player.duration,mode,updated:now
+    }));} catch (_) {}
+  };
+  const onEnd=()=>{
+    ended=true;
+    const old=checkpoint();
+    if(sameSource(old,source))try{localStorage.removeItem(playbackKey);}catch(_){}
+    showResumeInfo();
+  };
+  const onHidden=()=>{if(document.visibilityState==='hidden')save(true);};
+  const onPageHide=()=>save(true);
+  player.addEventListener('timeupdate',()=>save(false));
+  player.addEventListener('pause',()=>save(true));
+  player.addEventListener('seeked',()=>save(true));
+  player.addEventListener('ended',onEnd);
+  document.addEventListener('visibilitychange',onHidden);
+  window.addEventListener('pagehide',onPageHide);
+  detachPlayback=()=>{
+    save(true);
+    document.removeEventListener('visibilitychange',onHidden);
+    window.removeEventListener('pagehide',onPageHide);
+    detachPlayback=null;
+  };
+  if(!canResume)return false;
+  const notice=document.createElement('div');notice.className='note resume-actions';
+  const label=document.createElement('span');
+  label.textContent='Sesi sebelumnya: '+clockTime(saved.position)+'. ';
+  const button=document.createElement('button');
+  button.type='button';button.textContent='Lanjutkan dari '+clockTime(saved.position);
+  // Wait for metadata to avoid seeking an unknown duration on Safari.
+  button.disabled=player.readyState<1;
+  player.addEventListener('loadedmetadata',()=>{button.disabled=false;});
+  button.addEventListener('click',()=>{
+    if(!Number.isFinite(player.duration)||player.duration<=0)return;
+    const position=Math.max(0,Math.min(saved.position,player.duration-2));
+    player.currentTime=position;
+    button.disabled=true;
+    label.textContent='Melanjutkan dari '+clockTime(position)+'. ';
+    if(audioContext)audioContext.resume().catch(()=>{});
+    const playing=player.play();
+    if(playing?.catch)playing.catch(e=>{$('status').textContent='Tekan Play pada video: '+(e?.message||'pemutaran memerlukan interaksi.');});
+  });
+  notice.append(label,button);
+  host.prepend(notice);
+  return true;
+}
 
 function persist(phase) {
   try { sessionStorage.setItem(stateKey,JSON.stringify({phase,time:Date.now()})); } catch (_) {}
@@ -18,6 +133,7 @@ function showStage(message,phase,progress) {
   if (Number.isFinite(progress)) {bar.hidden=false;bar.max=1;bar.value=Math.max(0,Math.min(1,progress));}
 }
 function clearResult() {
+  if(detachPlayback)detachPlayback();
   if(centerNode){try{centerNode.disconnect();centerNode.port.onmessage=null;}catch(_){}centerNode=null;}
   if(audioContext) {audioContext.close().catch(()=>{});audioContext=null;}
   result.replaceChildren();
@@ -72,6 +188,7 @@ file.addEventListener('change',()=>{
   }
   run.disabled=!source;
   $('status').textContent='';
+  showResumeInfo();
 });
 cancel.addEventListener('click',abort);
 
@@ -150,6 +267,7 @@ function startPreview(source,centered) {
   note.className='note';
   note.textContent='Pratinjau EQ berjalan saat video diputar. Ini memperjelas frekuensi percakapan, bukan menghilangkan musik dengan AI. Tidak membuat file ekspor.';
   result.append(player,note);
+  const hasResume=attachPlayback(player,source,'dialog-preview',result);
   player.addEventListener('error',()=>{ $('status').textContent='Codec media tidak didukung oleh browser. Coba video MP4/H.264/AAC.'; });
   const Context=window.AudioContext||window.webkitAudioContext;
   if(!Context) throw Error('Perangkat tidak mendukung Web Audio API.');
@@ -176,13 +294,13 @@ function startPreview(source,centered) {
   presence.connect(compressor);compressor.connect(audioContext.destination);
   // Resume is called directly in the user-activation handler to satisfy iOS.
   const resume=audioContext.resume();
-  const play=player.play();
+  const play=hasResume?Promise.resolve():player.play();
   return Promise.allSettled([resume,play]).then(([,playState])=>{
     if(playState.status==='rejected') {
       const error=playState.reason;
       if(error?.name==='NotAllowedError') $('status').textContent='Pratinjau siap. Tekan Play pada video untuk memulai suara yang difilter.';
       else $('status').textContent='Tidak dapat memutar file: '+(error?.message||'Codec media tidak didukung.');
-    } else $('status').textContent='Pratinjau Dialog ringan aktif (tanpa FFmpeg).';
+    } else $('status').textContent=hasResume?'Pratinjau siap. Pilih Lanjutkan untuk kembali ke posisi terakhir.':'Pratinjau Dialog ringan aktif (tanpa FFmpeg).';
   });
 }
 
@@ -198,9 +316,10 @@ async function startCenterPreview(source){
   const note=document.createElement('p');note.className='note';
   note.textContent='Filter stereo dan penekan musik tengah adaptif berjalan saat video diputar. Ini bukan AI: musik yang bercampur dengan dialog tetap dapat terdengar.';
   const controls=document.createElement('div');controls.className='live-controls';
+  const defaults=savedControls();
   const text=document.createElement('label');text.textContent='Kekuatan peredaman stereo: ';
-  const strength=document.createElement('input');strength.type='range';strength.min='0';strength.max='100';strength.step='5';strength.value='85';
-  const percent=document.createElement('span');percent.textContent='85%';
+  const strength=document.createElement('input');strength.type='range';strength.min='0';strength.max='100';strength.step='5';strength.value=String(defaults.stereo);
+  const percent=document.createElement('span');percent.textContent=defaults.stereo+'%';
   text.append(strength,percent);
   // Separate control for music that is also located in the stereo center.
   // Its adaptive spectral floor helps for sustained music; voice may get thinner.
@@ -208,18 +327,29 @@ async function startCenterPreview(source){
   centerText.textContent='Redam musik di tengah (eksperimental): ';
   const centerStrength=document.createElement('input');
   centerStrength.type='range';centerStrength.min='0';centerStrength.max='100';
-  centerStrength.step='5';centerStrength.value='35';
-  const centerPercent=document.createElement('span');centerPercent.textContent='35%';
+  centerStrength.step='5';centerStrength.value=String(defaults.center);
+  const centerPercent=document.createElement('span');centerPercent.textContent=defaults.center+'%';
   centerText.append(centerStrength,centerPercent);
   const centerCaution=document.createElement('small');
   centerCaution.textContent='Melemahkan komponen suara yang stabil di tengah. ' +
     'Mulai 35%; 70–100% lebih agresif tetapi suara dialog dapat ikut tipis. ' +
     'Musik dan dialog yang benar-benar tumpang tindih tidak dapat dipisahkan sempurna tanpa model AI.';
+  // Post-filter vocal enhancement. It never reintroduces the unfiltered input.
+  const vocalText=document.createElement('label');
+  vocalText.textContent='Perkuat dialog / vokal setelah musik diredam: ';
+  const vocalBoost=document.createElement('input');vocalBoost.type='range';
+  vocalBoost.min='0';vocalBoost.max='12';vocalBoost.step='1';
+  vocalBoost.value=String(defaults.vocal);
+  const vocalValue=document.createElement('span');vocalValue.textContent='+'+defaults.vocal+' dB';
+  vocalText.append(vocalBoost,vocalValue);
+  const vocalNote=document.createElement('small');
+  vocalNote.textContent='Penguat bekerja SETELAH filter musik. Jika masih ada musik yang lolos, musik tersebut bisa ikut menguat. Kompresor membatasi lonjakan volume, tetapi jangan memakai volume HP terlalu tinggi.';
   const compare=document.createElement('label');
   const original=document.createElement('input');original.type='checkbox';
-  compare.append(original,document.createTextNode(' Bandingkan campuran asli (mono)'));
-  controls.append(text,centerText,centerCaution,compare);
+  compare.append(original,document.createTextNode(' Bandingkan campuran tanpa peredaman (mono, masih melalui EQ)'));
+  controls.append(text,centerText,centerCaution,vocalText,vocalNote,compare);
   result.append(player,note,controls);
+  const hasResume=attachPlayback(player,source,'center-live',result);
   player.addEventListener('error',()=>{$('status').textContent='Codec file tidak didukung iPhone. Coba video MP4/H.264/AAC.';});
   const Context=window.AudioContext||window.webkitAudioContext;
   if(!Context)throw Error('Web Audio API tidak tersedia di browser.');
@@ -229,10 +359,34 @@ async function startCenterPreview(source){
   const highpass=ctx.createBiquadFilter();highpass.type='highpass';highpass.frequency.value=140;
   const lowpass=ctx.createBiquadFilter();lowpass.type='lowpass';lowpass.frequency.value=5800;
   const presence=ctx.createBiquadFilter();presence.type='peaking';presence.frequency.value=2300;presence.Q.value=0.8;presence.gain.value=2;
-  const compressor=ctx.createDynamicsCompressor();compressor.threshold.value=-23;compressor.ratio.value=2;
-  sourceNode.connect(highpass);highpass.connect(lowpass);lowpass.connect(presence);presence.connect(compressor);compressor.connect(ctx.destination);
+  const compressor=ctx.createDynamicsCompressor();compressor.threshold.value=-23;compressor.ratio.value=2.5;
+  const voiceGain=ctx.createGain();
+  const limiter=ctx.createDynamicsCompressor();
+  limiter.threshold.value=-5;limiter.knee.value=1;limiter.ratio.value=18;
+  limiter.attack.value=0.003;limiter.release.value=0.16;
+  const applyVocalBoost=()=>{
+    const db=Number(vocalBoost.value);
+    vocalValue.textContent='+'+db+' dB';
+    voiceGain.gain.setTargetAtTime(original.checked?1:Math.pow(10,db/20),ctx.currentTime,0.025);
+    presence.gain.setTargetAtTime(original.checked?2:2+db/4,ctx.currentTime,0.025);
+  };
+  const persistControls=()=>saveControls({stereo:Number(strength.value),center:Number(centerStrength.value),vocal:Number(vocalBoost.value)});
+  sourceNode.connect(highpass);highpass.connect(lowpass);lowpass.connect(presence);
+  presence.connect(compressor);compressor.connect(voiceGain);voiceGain.connect(limiter);limiter.connect(ctx.destination);
+  applyVocalBoost();
+  // Wire controls before asynchronous AudioWorklet load, avoiding lost slider input.
+  strength.oninput=()=>{
+    percent.textContent=strength.value+'%';persistControls();
+    if(centerNode&&audioContext===ctx)centerNode.port.postMessage({type:'strength',value:Number(strength.value)/100});
+  };
+  centerStrength.oninput=()=>{
+    centerPercent.textContent=centerStrength.value+'%';persistControls();
+    if(centerNode&&audioContext===ctx)centerNode.port.postMessage({type:'centerStrength',value:Number(centerStrength.value)/100});
+  };
+  vocalBoost.oninput=()=>{persistControls();applyVocalBoost();};
   const resume=ctx.resume();
-  const play=player.play();
+  // Do not auto-play from 0 when a previous position is available.
+  const play=hasResume?Promise.resolve():player.play();
   const prepare=async()=>{
     if(!ctx.audioWorklet||typeof AudioWorkletNode==='undefined')
       throw Error('AudioWorklet tidak tersedia pada browser ini.');
@@ -248,20 +402,18 @@ async function startCenterPreview(source){
         note.textContent='Audio mono: pemisahan kiri/kanan tidak tersedia, tetapi filter adaptif musik tengah masih bekerja terbatas. Dialog mungkin ikut berubah.';
       }
     };
-    node.port.postMessage({type:'strength',value:0.85});
-    node.port.postMessage({type:'centerStrength',value:0.35});
-    strength.oninput=()=>{percent.textContent=strength.value+'%';node.port.postMessage({type:'strength',value:Number(strength.value)/100});};
-    centerStrength.oninput=()=>{centerPercent.textContent=centerStrength.value+'%';node.port.postMessage({type:'centerStrength',value:Number(centerStrength.value)/100});};
+    node.port.postMessage({type:'strength',value:Number(strength.value)/100});
+    node.port.postMessage({type:'centerStrength',value:Number(centerStrength.value)/100});
     player.addEventListener('seeking',()=>node.port.postMessage({type:'resetEstimator'}));
-    original.onchange=()=>node.port.postMessage({type:'bypass',value:original.checked});
+    original.onchange=()=>{node.port.postMessage({type:'bypass',value:original.checked});applyVocalBoost();};
     // Swap graph atomically: no two audible paths in parallel.
     sourceNode.disconnect();
     sourceNode.connect(node);node.connect(highpass);
-    $('status').textContent='Pemisahan stereo + peredaman adaptif musik tengah aktif. Tidak menggunakan FFmpeg atau AI; musik bisa tersisa.';
+    $('status').textContent=hasResume?'Filter siap. Tekan Lanjutkan untuk kembali ke posisi terakhir.':'Peredaman stereo dan musik tengah + penguat vokal aktif. Sisa musik masih mungkin terdengar.';
   };
   prepare().catch(e=>{
     if(audioContext===ctx){
-      controls.hidden=true;
+      text.hidden=true;centerText.hidden=true;centerCaution.hidden=true;compare.hidden=true;
       note.textContent='Pemisahan spektral tidak dapat diaktifkan. Video tetap dapat diputar dengan EQ suara biasa.';
       $('status').textContent='Pemisahan spektral tidak tersedia: '+e.message+' Filter Dialog ringan tetap berjalan.';
     }
@@ -343,3 +495,4 @@ try {
   forget();
 } catch(_) {}
 updateMode();
+showResumeInfo();
