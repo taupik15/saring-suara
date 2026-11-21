@@ -1,0 +1,13 @@
+FFmpeg WebAssembly core @ffmpeg/core 0.12.10
+https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/
+Source and build scripts: https://github.com/ffmpegwasm/ffmpeg.wasm/tree/v0.12.10
+FFmpeg licensing: https://ffmpeg.org/legal.html
+
+RNNoise model beguiling-drafter-2018-08-30
+https://github.com/GregorR/rnnoise-models/tree/master/beguiling-drafter-2018-08-30
+
+HTDemucs fine-tuned vocals weights and WASM port
+https://github.com/bengfarrell/demucs-wasm/tree/35c8bd5b74c56f630082058179cd8f57cb192fb2
+https://github.com/adefossez/demucs
+https://github.com/sevagh/demucs.cpp
+Wrapper license in vendor/LICENSE.
