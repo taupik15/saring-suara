@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Saring Suara · Fix 1</title>
+<title>Saring Suara · Fix 1.1</title>
 <style>
 *{box-sizing:border-box}body{margin:0;background:#eef2e9;color:#182d28;font:1rem/1.5 system-ui,-apple-system,sans-serif}
 main{max-width:720px;margin:auto;padding:28px 18px 60px}header{font-weight:800;letter-spacing:.04em}
@@ -15,28 +15,31 @@ button,a{display:inline-block;padding:12px 18px;color:white;background:#21594a;b
 button:disabled{opacity:.5}button#cancel{background:#a53f34}select{width:100%;padding:12px;margin:8px 0;font:inherit;border-radius:9px}
 progress,audio,video{display:block;width:100%;margin:14px 0;max-height:70vh}progress{height:8px}
 footer,.note,small{font-size:.88rem;color:#486157}.note{margin:8px 0;padding:10px 12px;background:#eef5ee;border-radius:9px}
+.live-controls{display:grid;gap:12px;padding:14px;background:#f2f6f2;border-radius:12px}.live-controls label{display:block;font-size:.96rem}.live-controls input[type=range]{display:block;width:100%;margin:12px 0 4px}.live-controls label:last-child{display:flex;gap:8px;align-items:start}
 #status{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.94rem;font-weight:550;margin:12px 0}
 [hidden]{display:none!important}p{margin:10px 0 18px}
 </style>
 </head>
 <body><main>
-<header>◉ &nbsp; Saring Suara <small>Fix 1</small></header>
+<header>◉ &nbsp; Saring Suara <small>Fix 1.1</small></header>
 <h1>Ambil suaranya.<br>Redam musiknya.</h1>
-<p>Pisahkan vokal/instrumen dengan HTDemucs, atau dengarkan pratinjau percakapan melalui filter ringan. Semua pemrosesan lokal, tanpa upload file.</p>
+<p>Putar video langsung sambil mencoba meredam musik yang menyebar di stereo. Tetap lokal, tanpa upload file. Pemisahan AI berat hanya untuk desktop.</p>
 <section>
 <label for="file">File sumber</label>
 <input id="file" type="file" accept="audio/*,video/*,.mkv,.m4a,.mov">
 <fieldset id="options">
 <label for="stem">Pilih mode</label>
 <select id="stem">
-<option value="dialog-preview">Dialog ringan · langsung diputar (tanpa FFmpeg)</option>
+<option value="center-live">Fokus suara stereo · langsung diputar (tanpa FFmpeg)</option>
+<option value="dialog-preview">Dialog ringan · EQ saja</option>
 <option value="dialog-export">Dialog RNNoise · ekspor (FFmpeg)</option>
 <option value="vokal">Vokal lagu · HTDemucs (berat)</option>
 <option value="instrumen">Instrumen saja · HTDemucs (berat)</option>
 </select>
-<p id="previewHint" class="note">Filter frekuensi suara untuk pratinjau video/audio langsung. <strong>Bukan pemisahan musik dengan AI</strong>, dan belum menghasilkan file ekspor.</p>
+<p id="previewHint" class="note">Pratinjau langsung tanpa konversi, tanpa FFmpeg dan tanpa HTDemucs. <strong>Tidak menjamin musik hilang</strong>; hasil bergantung pada posisi suara dalam rekaman stereo. Tidak menghasilkan file ekspor.</p>
+<p id="centerHint" class="note">Pemisahan spektral berbasis perbedaan saluran kiri/kanan. Paling efektif jika dialog di tengah dan musik tersebar. Musik di tengah atau sumber mono tidak dapat dipisahkan dengan teknik ini. <strong>Ini bukan model AI.</strong></p>
 <p id="exportWarning" class="note" hidden>Mode ekspor RNNoise memuat FFmpeg WebAssembly. Pada iPhone, browser masih bisa menutup tab jika memori tidak cukup.</p>
-<p id="hint" class="note" hidden>Model HTDemucs sekitar 52 MiB, ditambah memori WebAssembly untuk menjalankannya. Bahkan klip pendek bisa membebani iPhone.</p>
+<p id="hint" class="note" hidden>HTDemucs memerlukan RAM besar dan terbukti me-refresh browser iPhone. Opsi ini tersedia untuk desktop saja.</p>
 <div id="heavyGuard" class="note" hidden>
 <label><input id="allowHeavy" type="checkbox"> Saya paham HTDemucs berisiko membuat browser iPhone refresh, dan ingin mencobanya.</label>
 </div>
@@ -55,5 +58,5 @@ footer,.note,small{font-size:.88rem;color:#486157}.note{margin:8px 0;padding:10p
 <progress hidden></progress>
 <div id="result"></div>
 </section>
-<footer>Fix 1 mengurangi penumpukan memori melalui Worker terpisah, bukan menjamin HTDemucs kompatibel dengan semua iPhone. Untuk video 1 jam lebih dibutuhkan optimasi berikutnya (Fix 2). Preview Dialog ringan tidak setara dengan AI penghapus musik.</footer>
+<footer>Fix 1.1: default pemutaran langsung dengan AudioWorklet, tanpa pemuatan model berat di iPhone. Musik yang berada di tengah stereo atau rekaman mono masih dapat terdengar. Ini bukan pemisahan AI penuh. Mode ekspor dan HTDemucs desktop tetap menggunakan berkas proyek Fix 1.</footer>
 </main><script src="app.js"></script></body></html>

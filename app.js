@@ -5,7 +5,7 @@ const file=$('file'), run=$('run'), cancel=$('cancel'), result=$('result');
 const bar=document.querySelector('progress');
 const isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||
   (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
-let activeWorker=null, rejectActive=null, currentURL=null, audioContext=null, generation=0, running=false;
+let activeWorker=null, rejectActive=null, currentURL=null, audioContext=null, centerNode=null, generation=0, running=false;
 const stateKey='saring-suara-fix1-last-stage';
 
 function persist(phase) {
@@ -18,6 +18,7 @@ function showStage(message,phase,progress) {
   if (Number.isFinite(progress)) {bar.hidden=false;bar.max=1;bar.value=Math.max(0,Math.min(1,progress));}
 }
 function clearResult() {
+  if(centerNode){try{centerNode.disconnect();centerNode.port.onmessage=null;}catch(_){}centerNode=null;}
   if(audioContext) {audioContext.close().catch(()=>{});audioContext=null;}
   result.replaceChildren();
   if(currentURL) URL.revokeObjectURL(currentURL);
@@ -43,8 +44,9 @@ function updateMode() {
   if(currentURL&&!running) clearResult();
   const stem=$('stem').value;
   const song=stem==='vokal'||stem==='instrumen';
-  const preview=stem==='dialog-preview';
-  $('dialogOptions').hidden=song;
+  const preview=stem==='dialog-preview'||stem==='center-live';
+  $('dialogOptions').hidden=song||stem==='center-live';
+  $('centerHint').hidden=stem!=='center-live';
   $('hint').hidden=!song;
   $('modeOptions').hidden=preview;
   $('previewHint').hidden=!preview;
@@ -52,6 +54,13 @@ function updateMode() {
   $('exportWarning').hidden=stem!=='dialog-export';
 }
 
+// HTDemucs cannot be used reliably on iPhone: block it rather than baiting users
+// into a repeatable tab-killing memory allocation. Desktop still has it.
+if(isIOS){
+  for(const opt of $('stem').options) if(opt.value==='vokal'||opt.value==='instrumen'){
+    opt.disabled=true;opt.textContent+=' · tidak tersedia di iPhone';
+  }
+}
 $('stem').addEventListener('change',updateMode);
 file.addEventListener('change',()=>{
   if(running) abort();
@@ -177,11 +186,88 @@ function startPreview(source,centered) {
   });
 }
 
+// Real-time stereo mid/side spectral masking via a dedicated AudioWorklet.
+// This targets music spread across stereo channels; it is not an AI separator.
+// No giant model, no FFmpeg and no full-file conversion are involved.
+async function startCenterPreview(source){
+  clearResult();
+  currentURL=URL.createObjectURL(source);
+  const player=document.createElement(isVideo(source)?'video':'audio');
+  player.controls=true;player.playsInline=true;player.preload='metadata';
+  player.src=currentURL;
+  const note=document.createElement('p');note.className='note';
+  note.textContent='Pemrosesan spektral pusat stereo berjalan sambil video diputar. Musik yang berada di tengah atau audio mono mungkin tetap terdengar. Ini bukan AI.';
+  const controls=document.createElement('div');controls.className='live-controls';
+  const text=document.createElement('label');text.textContent='Kekuatan peredaman stereo: ';
+  const strength=document.createElement('input');strength.type='range';strength.min='0';strength.max='100';strength.step='5';strength.value='85';
+  const percent=document.createElement('span');percent.textContent='85%';
+  text.append(strength,percent);
+  const compare=document.createElement('label');
+  const original=document.createElement('input');original.type='checkbox';
+  compare.append(original,document.createTextNode(' Bandingkan dengan suara asli'));
+  controls.append(text,compare);
+  result.append(player,note,controls);
+  player.addEventListener('error',()=>{$('status').textContent='Codec file tidak didukung iPhone. Coba video MP4/H.264/AAC.';});
+  const Context=window.AudioContext||window.webkitAudioContext;
+  if(!Context)throw Error('Web Audio API tidak tersedia di browser.');
+  const ctx=new Context();audioContext=ctx;
+  const sourceNode=ctx.createMediaElementSource(player);
+  // Connect immediately, and call resume()/play() while still in user gesture.
+  const highpass=ctx.createBiquadFilter();highpass.type='highpass';highpass.frequency.value=140;
+  const lowpass=ctx.createBiquadFilter();lowpass.type='lowpass';lowpass.frequency.value=5800;
+  const presence=ctx.createBiquadFilter();presence.type='peaking';presence.frequency.value=2300;presence.Q.value=0.8;presence.gain.value=2;
+  const compressor=ctx.createDynamicsCompressor();compressor.threshold.value=-23;compressor.ratio.value=2;
+  sourceNode.connect(highpass);highpass.connect(lowpass);lowpass.connect(presence);presence.connect(compressor);compressor.connect(ctx.destination);
+  const resume=ctx.resume();
+  const play=player.play();
+  const prepare=async()=>{
+    if(!ctx.audioWorklet||typeof AudioWorkletNode==='undefined')
+      throw Error('AudioWorklet tidak tersedia pada browser ini.');
+    await ctx.audioWorklet.addModule('voice-worklet.js');
+    if(audioContext!==ctx) return;
+    const node=new AudioWorkletNode(ctx,'saring-center-voice',{
+      numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1],
+      channelCount:2,channelCountMode:'max'
+    });
+    centerNode=node;
+    node.port.onmessage=({data})=>{
+      if(data?.type==='mono'&&audioContext===ctx){
+        note.textContent='Audio terdeteksi mono: metode pusat stereo tidak dapat memisahkan musik. Hanya EQ suara yang tersisa.';
+      }
+    };
+    node.port.postMessage({type:'strength',value:0.85});
+    strength.oninput=()=>{percent.textContent=strength.value+'%';node.port.postMessage({type:'strength',value:Number(strength.value)/100});};
+    original.onchange=()=>node.port.postMessage({type:'bypass',value:original.checked});
+    // Swap graph atomically: no two audible paths in parallel.
+    sourceNode.disconnect();
+    sourceNode.connect(node);node.connect(highpass);
+    $('status').textContent='Pemisahan pusat stereo aktif (tanpa FFmpeg/HTDemucs). Musik yang ada di tengah bisa tersisa.';
+  };
+  prepare().catch(e=>{
+    if(audioContext===ctx){
+      controls.hidden=true;
+      note.textContent='Pemisahan spektral tidak dapat diaktifkan. Video tetap dapat diputar dengan EQ suara biasa.';
+      $('status').textContent='Pemisahan spektral tidak tersedia: '+e.message+' Filter Dialog ringan tetap berjalan.';
+    }
+  });
+  Promise.allSettled([resume,play]).then(([,p])=>{
+    if(audioContext!==ctx)return;
+    if(p.status==='rejected'){
+      const msg=p.reason?.name==='NotAllowedError'?'Tekan Play pada video.':'Media gagal diputar: '+(p.reason?.message||'codec tidak didukung');
+      $('status').textContent=msg;
+    }
+  });
+}
+
 run.addEventListener('click',()=>{
   const source=file.files[0];if(!source||running) return;
   const stem=$('stem').value;
-  if((stem==='vokal'||stem==='instrumen')&&isIOS&&!$('allowHeavy').checked) {
-    $('status').textContent='HTDemucs 52 MiB berisiko membuat tab iPhone refresh. Centang izin percobaan model berat jika ingin melanjutkan, atau gunakan Dialog ringan.';
+  if((stem==='vokal'||stem==='instrumen')&&isIOS) {
+    $('status').textContent='HTDemucs tidak dijalankan di iPhone karena terbukti membuat tab refresh. Gunakan Pemisahan pusat stereo atau komputer untuk HTDemucs.';
+    return;
+  }
+  if(stem==='center-live') {
+    startCenterPreview(source).catch(e=>{$('status').textContent='Pratinjau gagal: '+e.message;});
     return;
   }
   if(stem==='dialog-preview') {
