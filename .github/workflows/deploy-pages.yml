@@ -1,4 +1,3 @@
-
 name: Deploy Saring Suara + GTCRN
 
 on:
@@ -19,7 +18,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -33,12 +31,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for file in scripts/install-gtcrn.sh scripts/gtcrn-worklet-entry.js gtcrn-filter.js app.js voice-worklet.js index.html; do
+          for file in scripts/install-gtcrn.sh scripts/gtcrn-worklet-entry.js scripts/install-rnnoise.sh rnnoise-filter.js gtcrn-filter.js app.js voice-worklet.js index.html; do
             test -s "$file" || { echo "Missing: $file"; exit 1; }
           done
 
       - name: Build GTCRN AI assets
         run: bash scripts/install-gtcrn.sh
+
+      - name: Build RNNoise live WASM assets
+        run: bash scripts/install-rnnoise.sh
 
       - name: Validate JavaScript and WASM
         shell: bash
@@ -46,11 +47,17 @@ jobs:
           set -euo pipefail
           node --check app.js
           node --check gtcrn-filter.js
+          node --check rnnoise-filter.js
+          node --check vendor-rnnoise/rnnoise-main.js
+          node --check vendor-rnnoise/rnnoise-worklet.js
+          test -s vendor-rnnoise/rnnoise.wasm
+          node -e "const fs=require('node:fs');if(!WebAssembly.validate(fs.readFileSync('vendor-rnnoise/rnnoise.wasm')))process.exit(1)"
           node --check voice-worklet.js
           node --check vendor-gtcrn/gtcrn-worklet.js
           node -e "const fs=require('node:fs');if(!WebAssembly.validate(fs.readFileSync('vendor-gtcrn/gtcrn.wasm')))process.exit(1)"
           if [ -f tests/fix16.test.cjs ]; then node --test tests/fix16.test.cjs; fi
           if [ -f tests/resume-voice-test.cjs ]; then node tests/resume-voice-test.cjs; fi
+          if [ -f tests/fix17.test.cjs ]; then node --test tests/fix17.test.cjs; fi
 
       - name: Prepare static website
         shell: bash
@@ -58,10 +65,12 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/saring-site"
           rsync -a --exclude='.git/' --exclude='.github/' --exclude='scripts/' --exclude='tests/' \
-            --exclude='*.zip' --exclude='*.md' ./ "$RUNNER_TEMP/saring-site/"
+            --exclude='*.zip' --exclude='*.md' --exclude='WORKFLOW-*.txt' ./ "$RUNNER_TEMP/saring-site/"
           test -s "$RUNNER_TEMP/saring-site/index.html"
           test -s "$RUNNER_TEMP/saring-site/vendor-gtcrn/gtcrn.wasm"
           test -s "$RUNNER_TEMP/saring-site/vendor-gtcrn/gtcrn-worklet.js"
+          test -s "$RUNNER_TEMP/saring-site/vendor-rnnoise/rnnoise.wasm"
+          test -s "$RUNNER_TEMP/saring-site/vendor-rnnoise/rnnoise-worklet.js"
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
@@ -78,7 +87,6 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
       - name: Allow artifact metadata to propagate
         run: sleep 20
