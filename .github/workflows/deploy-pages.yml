@@ -13,17 +13,15 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Node 22
@@ -31,35 +29,62 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Build GTCRN AI assets (local WASM, no CDN at playback)
-        run: bash scripts/install-gtcrn.sh
-
-      - name: Verify JavaScript and GTCRN integration
+      - name: Check required source files
         shell: bash
         run: |
+          set -euo pipefail
+          for file in scripts/install-gtcrn.sh scripts/gtcrn-worklet-entry.js gtcrn-filter.js app.js voice-worklet.js index.html; do
+            test -s "$file" || { echo "Missing: $file"; exit 1; }
+          done
+
+      - name: Build GTCRN AI assets
+        run: bash scripts/install-gtcrn.sh
+
+      - name: Validate JavaScript and WASM
+        shell: bash
+        run: |
+          set -euo pipefail
           node --check app.js
           node --check gtcrn-filter.js
           node --check voice-worklet.js
-          node --test tests/fix16.test.cjs
-          node tests/resume-voice-test.cjs
-          node -e "const fs=require('node:fs');if(!WebAssembly.validate(fs.readFileSync('vendor-gtcrn/gtcrn.wasm')))process.exit(1);"
-          test -s vendor-gtcrn/gtcrn.wasm
-          test -s vendor-gtcrn/gtcrn-worklet.js
+          node --check vendor-gtcrn/gtcrn-worklet.js
+          node -e "const fs=require('node:fs');if(!WebAssembly.validate(fs.readFileSync('vendor-gtcrn/gtcrn.wasm')))process.exit(1)"
+          if [ -f tests/fix16.test.cjs ]; then node --test tests/fix16.test.cjs; fi
+          if [ -f tests/resume-voice-test.cjs ]; then node tests/resume-voice-test.cjs; fi
 
       - name: Prepare static website
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p "$RUNNER_TEMP/saring-site"
           rsync -a --exclude='.git/' --exclude='.github/' --exclude='scripts/' --exclude='tests/' \
             --exclude='*.zip' --exclude='*.md' ./ "$RUNNER_TEMP/saring-site/"
+          test -s "$RUNNER_TEMP/saring-site/index.html"
+          test -s "$RUNNER_TEMP/saring-site/vendor-gtcrn/gtcrn.wasm"
+          test -s "$RUNNER_TEMP/saring-site/vendor-gtcrn/gtcrn-worklet.js"
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload website
+      - name: Upload website artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ${{ runner.temp }}/saring-site
 
-      - name: Deploy website
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Allow artifact metadata to propagate
+        run: sleep 20
+
+      - name: Deploy GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages
