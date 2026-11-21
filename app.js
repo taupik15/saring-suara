@@ -24,7 +24,7 @@ function savedControls() {
   return {stereo:clampNumber(s.stereo,0,100,85),
     center:clampNumber(s.center,0,100,35),
     vocal:clampNumber(s.vocal,-12,12,4),
-    aiLevel:clampNumber(s.aiLevel,0,100,50)};
+    gtcrnMix:clampNumber(s.gtcrnMix,0,100,25)};
 }
 function saveControls(values) {
   try {localStorage.setItem(settingsKey,JSON.stringify(values));} catch (_) {}
@@ -353,14 +353,14 @@ async function startCenterPreview(source){
   const aiSection=document.createElement('div');aiSection.className='ai-controls';
   const aiLabel=document.createElement('label');
   const aiSwitch=document.createElement('input');aiSwitch.type='checkbox';aiSwitch.id='aiEnabled';
-  aiLabel.append(aiSwitch,document.createTextNode(' Aktifkan AI DeepFilterNet3 (eksperimental)'));
-  const aiStrengthLabel=document.createElement('label');aiStrengthLabel.textContent='Kekuatan AI: ';
+  aiLabel.append(aiSwitch,document.createTextNode(' AI penjernih GTCRN (opsional)'));
+  const aiStrengthLabel=document.createElement('label');aiStrengthLabel.textContent='Campuran AI (0% = suara filter sebelumnya): ';
   const aiStrength=document.createElement('input');aiStrength.type='range';aiStrength.min='0';aiStrength.max='100';
-  aiStrength.step='5';aiStrength.value=String(defaults.aiLevel);
-  const aiPercent=document.createElement('span');aiPercent.textContent=defaults.aiLevel+'%';
+  aiStrength.step='5';aiStrength.value=String(defaults.gtcrnMix);
+  const aiPercent=document.createElement('span');aiPercent.textContent=defaults.gtcrnMix+'%';
   aiStrengthLabel.append(aiStrength,aiPercent);aiStrengthLabel.hidden=true;
   const aiStatus=document.createElement('small');aiStatus.setAttribute('role','status');
-  aiStatus.textContent='AI mati secara default. Aktivasi pertama perlu mengunduh runtime/model; file video tidak diunggah.';
+  aiStatus.textContent='AI mati secara default. Hasil AI dicampur dengan suara filter sebelumnya; penghilangan musik tidak dijamin.';
   aiSection.append(aiLabel,aiStrengthLabel,aiStatus);
   controls.append(text,centerText,centerCaution,vocalText,vocalNote,compare,aiSection);
   result.append(player,note,controls);
@@ -387,7 +387,7 @@ async function startCenterPreview(source){
     voiceGain.gain.setTargetAtTime(original.checked?1:Math.pow(10,db/20),ctx.currentTime,0.025);
     presence.gain.setTargetAtTime(original.checked?2:2+db/4,ctx.currentTime,0.025);
   };
-  const persistControls=()=>saveControls({stereo:Number(strength.value),center:Number(centerStrength.value),vocal:Number(vocalBoost.value),aiLevel:Number(aiStrength.value)});
+  const persistControls=()=>saveControls({stereo:Number(strength.value),center:Number(centerStrength.value),vocal:Number(vocalBoost.value),gtcrnMix:Number(aiStrength.value)});
   sourceNode.connect(highpass);highpass.connect(lowpass);lowpass.connect(presence);
   presence.connect(compressor);compressor.connect(voiceGain);voiceGain.connect(limiter);limiter.connect(ctx.destination);
   if(window.SaringAI){
@@ -396,7 +396,7 @@ async function startCenterPreview(source){
       onStatus:message=>{if(audioContext===ctx)aiStatus.textContent=message;},
       onFailure:()=>{if(audioContext===ctx){aiSwitch.checked=false;aiStrengthLabel.hidden=true;}}
     });
-    aiController.setLevel(defaults.aiLevel);
+    aiController.setLevel(defaults.gtcrnMix);
     aiSwitch.onchange=()=>{
       if(audioContext!==ctx)return;
       aiStrengthLabel.hidden=!aiSwitch.checked;
@@ -406,7 +406,7 @@ async function startCenterPreview(source){
       aiPercent.textContent=aiStrength.value+'%';persistControls();
       aiController?.setLevel(Number(aiStrength.value));
     };
-  }else {aiSwitch.disabled=true;aiStatus.textContent='Kode integrasi AI belum dimuat. Filter biasa tetap berjalan.';}
+  }else {aiSwitch.disabled=true;aiStatus.textContent='Modul GTCRN tidak tersedia; filter stereo tetap berjalan.';}
   applyVocalBoost();
   // Wire controls before asynchronous AudioWorklet load, avoiding lost slider input.
   strength.oninput=()=>{
@@ -438,7 +438,7 @@ async function startCenterPreview(source){
     };
     node.port.postMessage({type:'strength',value:Number(strength.value)/100});
     node.port.postMessage({type:'centerStrength',value:Number(centerStrength.value)/100});
-    player.addEventListener('seeking',()=>node.port.postMessage({type:'resetEstimator'}));
+    player.addEventListener('seeking',()=>{node.port.postMessage({type:'resetEstimator'});aiController?.reset?.();});
     original.onchange=()=>{node.port.postMessage({type:'bypass',value:original.checked});applyVocalBoost();};
     // Swap graph atomically: no two audible paths in parallel.
     sourceNode.disconnect();
