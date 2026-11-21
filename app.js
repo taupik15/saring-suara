@@ -196,16 +196,29 @@ async function startCenterPreview(source){
   player.controls=true;player.playsInline=true;player.preload='metadata';
   player.src=currentURL;
   const note=document.createElement('p');note.className='note';
-  note.textContent='Pemrosesan spektral pusat stereo berjalan sambil video diputar. Musik yang berada di tengah atau audio mono mungkin tetap terdengar. Ini bukan AI.';
+  note.textContent='Filter stereo dan penekan musik tengah adaptif berjalan saat video diputar. Ini bukan AI: musik yang bercampur dengan dialog tetap dapat terdengar.';
   const controls=document.createElement('div');controls.className='live-controls';
   const text=document.createElement('label');text.textContent='Kekuatan peredaman stereo: ';
   const strength=document.createElement('input');strength.type='range';strength.min='0';strength.max='100';strength.step='5';strength.value='85';
   const percent=document.createElement('span');percent.textContent='85%';
   text.append(strength,percent);
+  // Separate control for music that is also located in the stereo center.
+  // Its adaptive spectral floor helps for sustained music; voice may get thinner.
+  const centerText=document.createElement('label');
+  centerText.textContent='Redam musik di tengah (eksperimental): ';
+  const centerStrength=document.createElement('input');
+  centerStrength.type='range';centerStrength.min='0';centerStrength.max='100';
+  centerStrength.step='5';centerStrength.value='35';
+  const centerPercent=document.createElement('span');centerPercent.textContent='35%';
+  centerText.append(centerStrength,centerPercent);
+  const centerCaution=document.createElement('small');
+  centerCaution.textContent='Melemahkan komponen suara yang stabil di tengah. ' +
+    'Mulai 35%; 70–100% lebih agresif tetapi suara dialog dapat ikut tipis. ' +
+    'Musik dan dialog yang benar-benar tumpang tindih tidak dapat dipisahkan sempurna tanpa model AI.';
   const compare=document.createElement('label');
   const original=document.createElement('input');original.type='checkbox';
-  compare.append(original,document.createTextNode(' Bandingkan dengan suara asli'));
-  controls.append(text,compare);
+  compare.append(original,document.createTextNode(' Bandingkan campuran asli (mono)'));
+  controls.append(text,centerText,centerCaution,compare);
   result.append(player,note,controls);
   player.addEventListener('error',()=>{$('status').textContent='Codec file tidak didukung iPhone. Coba video MP4/H.264/AAC.';});
   const Context=window.AudioContext||window.webkitAudioContext;
@@ -232,16 +245,19 @@ async function startCenterPreview(source){
     centerNode=node;
     node.port.onmessage=({data})=>{
       if(data?.type==='mono'&&audioContext===ctx){
-        note.textContent='Audio terdeteksi mono: metode pusat stereo tidak dapat memisahkan musik. Hanya EQ suara yang tersisa.';
+        note.textContent='Audio mono: pemisahan kiri/kanan tidak tersedia, tetapi filter adaptif musik tengah masih bekerja terbatas. Dialog mungkin ikut berubah.';
       }
     };
     node.port.postMessage({type:'strength',value:0.85});
+    node.port.postMessage({type:'centerStrength',value:0.35});
     strength.oninput=()=>{percent.textContent=strength.value+'%';node.port.postMessage({type:'strength',value:Number(strength.value)/100});};
+    centerStrength.oninput=()=>{centerPercent.textContent=centerStrength.value+'%';node.port.postMessage({type:'centerStrength',value:Number(centerStrength.value)/100});};
+    player.addEventListener('seeking',()=>node.port.postMessage({type:'resetEstimator'}));
     original.onchange=()=>node.port.postMessage({type:'bypass',value:original.checked});
     // Swap graph atomically: no two audible paths in parallel.
     sourceNode.disconnect();
     sourceNode.connect(node);node.connect(highpass);
-    $('status').textContent='Pemisahan pusat stereo aktif (tanpa FFmpeg/HTDemucs). Musik yang ada di tengah bisa tersisa.';
+    $('status').textContent='Pemisahan stereo + peredaman adaptif musik tengah aktif. Tidak menggunakan FFmpeg atau AI; musik bisa tersisa.';
   };
   prepare().catch(e=>{
     if(audioContext===ctx){

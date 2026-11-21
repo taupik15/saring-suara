@@ -1,7 +1,8 @@
 /*
- * Saring Suara Fix 1.1 — low-memory, browser-native center-channel extractor.
+ * Saring Suara Fix 1.2 — low-memory adaptive center-voice enhancement.
  * No pretrained model and no FFmpeg. This attenuates stereo side information;
- * centered music and mono material cannot be separated by this technique.
+ * stationary centered music can be reduced using temporal spectral subtraction,
+ * but overlapping centered voice/music cannot be cleanly separated without AI.
  * MIT-style project local implementation; no third-party code included.
  */
 'use strict';
@@ -24,6 +25,12 @@ class CenterVoiceProcessor extends AudioWorkletProcessor {
     this.normalization = new Float32Array(RING);
     this.delayedDry = new Float32Array(RING);
     this.gainHistory = new Float32Array(FFT_SIZE / 2 + 1).fill(1);
+    // Lightweight adaptive music-bed estimate for CENTERED sound only.
+    // One value per FFT bin; bounded constant memory independent of video duration.
+    this.bedEstimate = new Float32Array(FFT_SIZE / 2 + 1);
+    this.centerGainHistory = new Float32Array(FFT_SIZE / 2 + 1).fill(1);
+    this.centerFrames = 0;
+    this.centerStrength = 0.35;
     this.bitReversal = new Uint16Array(FFT_SIZE);
     this.stageCos = [];
     this.stageSin = [];
@@ -47,6 +54,13 @@ class CenterVoiceProcessor extends AudioWorkletProcessor {
       if (!data || typeof data !== 'object') return;
       if (data.type === 'strength' && Number.isFinite(data.value))
         this.strength = Math.min(1, Math.max(0, data.value));
+      else if (data.type === 'centerStrength' && Number.isFinite(data.value))
+        this.centerStrength = Math.min(1, Math.max(0, data.value));
+      else if (data.type === 'resetEstimator') {
+        this.bedEstimate.fill(0);
+        this.centerGainHistory.fill(1);
+        this.centerFrames = 0;
+      }
       else if (data.type === 'bypass') this.bypass = !!data.value;
     };
   }
@@ -105,6 +119,10 @@ class CenterVoiceProcessor extends AudioWorkletProcessor {
     const s = this.strength;
     const weight = 0.15 + 42 * s * s;
     const floor = 0.025 + 0.175 * (1 - s);
+    this.centerFrames++;
+    // Gentle ramp prevents sudden artifacts before the background estimate settles.
+    const warmup = Math.min(1, Math.max(0, (this.centerFrames - 12) / 90));
+    const centerDepth = this.centerStrength * 0.91 * warmup;
     for (let k = 0; k <= N / 2; k++) {
       const mr = this.midRe[k], mi = this.midIm[k];
       const sr = this.sideRe[k], si = this.sideIm[k];
@@ -114,8 +132,25 @@ class CenterVoiceProcessor extends AudioWorkletProcessor {
       const target = floor + (1 - floor) * dominance;
       const previous = this.gainHistory[k];
       // Smooth across frames so hard speech/music transitions do not click.
-      const gain = previous + 0.32 * (target - previous);
-      this.gainHistory[k] = gain;
+      const stereoGain = previous + 0.32 * (target - previous);
+      this.gainHistory[k] = stereoGain;
+
+      // MUSIC IN THE CENTER: a slowly varying spectral bed is likely to be
+      // sustained background content. New spectral components (often speech)
+      // are less attenuated. This is an estimate, not true source separation.
+      const amplitude = Math.sqrt(midPower);
+      const oldBed = this.bedEstimate[k];
+      const bed = this.centerFrames === 1 ? amplitude
+        : oldBed + (amplitude < oldBed ? 0.16 : 0.008) * (amplitude - oldBed);
+      this.bedEstimate[k] = bed;
+      const stationaryFraction = Math.min(1, bed / (amplitude + 1e-8));
+      // Adaptive per-bin attenuation, with finite floor to keep dialogue audible.
+      const centerTarget = 1 - centerDepth * stationaryFraction;
+      const oldCenterGain = this.centerGainHistory[k];
+      const centerGain = oldCenterGain + (centerTarget < oldCenterGain ? 0.18 : 0.35) *
+        (centerTarget - oldCenterGain);
+      this.centerGainHistory[k] = centerGain;
+      const gain = stereoGain * centerGain;
       this.midRe[k] *= gain; this.midIm[k] *= gain;
       if (k > 0 && k < N / 2) {
         this.midRe[N - k] *= gain;
