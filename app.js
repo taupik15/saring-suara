@@ -5,7 +5,7 @@ const file=$('file'), run=$('run'), cancel=$('cancel'), result=$('result');
 const bar=document.querySelector('progress');
 const isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||
   (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
-let activeWorker=null, rejectActive=null, currentURL=null, audioContext=null, centerNode=null, generation=0, running=false;
+let activeWorker=null, rejectActive=null, currentURL=null, audioContext=null, centerNode=null, aiController=null, generation=0, running=false;
 let detachPlayback=null;
 const stateKey='saring-suara-fix1-last-stage';
 
@@ -23,7 +23,8 @@ function savedControls() {
   const s=jsonFromStorage(settingsKey)||{};
   return {stereo:clampNumber(s.stereo,0,100,85),
     center:clampNumber(s.center,0,100,35),
-    vocal:clampNumber(s.vocal,-12,12,4)};
+    vocal:clampNumber(s.vocal,-12,12,4),
+    aiLevel:clampNumber(s.aiLevel,0,100,50)};
 }
 function saveControls(values) {
   try {localStorage.setItem(settingsKey,JSON.stringify(values));} catch (_) {}
@@ -133,6 +134,7 @@ function showStage(message,phase,progress) {
   if (Number.isFinite(progress)) {bar.hidden=false;bar.max=1;bar.value=Math.max(0,Math.min(1,progress));}
 }
 function clearResult() {
+  if(aiController){try{aiController.destroy();}catch(_){}aiController=null;}
   if(detachPlayback)detachPlayback();
   if(centerNode){try{centerNode.disconnect();centerNode.port.onmessage=null;}catch(_){}centerNode=null;}
   if(audioContext) {audioContext.close().catch(()=>{});audioContext=null;}
@@ -343,17 +345,32 @@ async function startCenterPreview(source){
   const vocalValue=document.createElement('span');vocalValue.textContent=(defaults.vocal>0?'+':'')+defaults.vocal+' dB';
   vocalText.append(vocalBoost,vocalValue);
   const vocalNote=document.createElement('small');
-  vocalNote.textContent='Atur volume hasil filter: nilai negatif memperkecil, 0 dB netral, nilai positif memperkuat. Karena ini bukan AI, sisa musik yang lolos juga ikut berubah volumenya. Pembatas lonjakan tetap aktif.';
+  vocalNote.textContent='Mengatur level keluaran setelah peredaman musik dan AI (jika aktif). Sisa musik yang belum hilang juga dapat ikut berubah volumenya.';
   const compare=document.createElement('label');
   const original=document.createElement('input');original.type='checkbox';
   compare.append(original,document.createTextNode(' Bandingkan campuran tanpa peredaman (mono, masih melalui EQ)'));
-  controls.append(text,centerText,centerCaution,vocalText,vocalNote,compare);
+  // Optional real neural inference; off until explicitly enabled to protect iPhone RAM.
+  const aiSection=document.createElement('div');aiSection.className='ai-controls';
+  const aiLabel=document.createElement('label');
+  const aiSwitch=document.createElement('input');aiSwitch.type='checkbox';aiSwitch.id='aiEnabled';
+  aiLabel.append(aiSwitch,document.createTextNode(' Aktifkan AI DeepFilterNet3 (eksperimental)'));
+  const aiStrengthLabel=document.createElement('label');aiStrengthLabel.textContent='Kekuatan AI: ';
+  const aiStrength=document.createElement('input');aiStrength.type='range';aiStrength.min='0';aiStrength.max='100';
+  aiStrength.step='5';aiStrength.value=String(defaults.aiLevel);
+  const aiPercent=document.createElement('span');aiPercent.textContent=defaults.aiLevel+'%';
+  aiStrengthLabel.append(aiStrength,aiPercent);aiStrengthLabel.hidden=true;
+  const aiStatus=document.createElement('small');aiStatus.setAttribute('role','status');
+  aiStatus.textContent='AI mati secara default. Aktivasi pertama perlu mengunduh runtime/model; file video tidak diunggah.';
+  aiSection.append(aiLabel,aiStrengthLabel,aiStatus);
+  controls.append(text,centerText,centerCaution,vocalText,vocalNote,compare,aiSection);
   result.append(player,note,controls);
   const hasResume=attachPlayback(player,source,'center-live',result);
   player.addEventListener('error',()=>{$('status').textContent='Codec file tidak didukung iPhone. Coba video MP4/H.264/AAC.';});
   const Context=window.AudioContext||window.webkitAudioContext;
   if(!Context)throw Error('Web Audio API tidak tersedia di browser.');
-  const ctx=new Context();audioContext=ctx;
+  let ctx;
+  try {ctx=new Context({sampleRate:48000});} catch (_) {ctx=new Context();}
+  audioContext=ctx;
   const sourceNode=ctx.createMediaElementSource(player);
   // Connect immediately, and call resume()/play() while still in user gesture.
   const highpass=ctx.createBiquadFilter();highpass.type='highpass';highpass.frequency.value=140;
@@ -370,9 +387,26 @@ async function startCenterPreview(source){
     voiceGain.gain.setTargetAtTime(original.checked?1:Math.pow(10,db/20),ctx.currentTime,0.025);
     presence.gain.setTargetAtTime(original.checked?2:2+db/4,ctx.currentTime,0.025);
   };
-  const persistControls=()=>saveControls({stereo:Number(strength.value),center:Number(centerStrength.value),vocal:Number(vocalBoost.value)});
+  const persistControls=()=>saveControls({stereo:Number(strength.value),center:Number(centerStrength.value),vocal:Number(vocalBoost.value),aiLevel:Number(aiStrength.value)});
   sourceNode.connect(highpass);highpass.connect(lowpass);lowpass.connect(presence);
   presence.connect(compressor);compressor.connect(voiceGain);voiceGain.connect(limiter);limiter.connect(ctx.destination);
+  if(window.SaringAI){
+    aiController=window.SaringAI.create({
+      context:ctx,upstream:compressor,downstream:voiceGain,
+      onStatus:message=>{if(audioContext===ctx)aiStatus.textContent=message;},
+      onFailure:()=>{if(audioContext===ctx){aiSwitch.checked=false;aiStrengthLabel.hidden=true;}}
+    });
+    aiController.setLevel(defaults.aiLevel);
+    aiSwitch.onchange=()=>{
+      if(audioContext!==ctx)return;
+      aiStrengthLabel.hidden=!aiSwitch.checked;
+      aiController?.enable(aiSwitch.checked);
+    };
+    aiStrength.oninput=()=>{
+      aiPercent.textContent=aiStrength.value+'%';persistControls();
+      aiController?.setLevel(Number(aiStrength.value));
+    };
+  }else {aiSwitch.disabled=true;aiStatus.textContent='Kode integrasi AI belum dimuat. Filter biasa tetap berjalan.';}
   applyVocalBoost();
   // Wire controls before asynchronous AudioWorklet load, avoiding lost slider input.
   strength.oninput=()=>{

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Saring Suara · Fix 1.4</title>
+<title>Saring Suara · Fix 1.5</title>
 <style>
 *{box-sizing:border-box}body{margin:0;background:#eef2e9;color:#182d28;font:1rem/1.5 system-ui,-apple-system,sans-serif}
 main{max-width:720px;margin:auto;padding:28px 18px 60px}header{font-weight:800;letter-spacing:.04em}
@@ -15,15 +15,15 @@ button,a{display:inline-block;padding:12px 18px;color:white;background:#21594a;b
 button:disabled{opacity:.5}button#cancel{background:#a53f34}select{width:100%;padding:12px;margin:8px 0;font:inherit;border-radius:9px}
 progress,audio,video{display:block;width:100%;margin:14px 0;max-height:70vh}progress{height:8px}
 footer,.note,small{font-size:.88rem;color:#486157}.note{margin:8px 0;padding:10px 12px;background:#eef5ee;border-radius:9px}
-.live-controls{display:grid;gap:12px;padding:14px;background:#f2f6f2;border-radius:12px}.live-controls label{display:block;font-size:.96rem}.live-controls input[type=range]{display:block;width:100%;margin:12px 0 4px}.live-controls label:last-child{display:flex;gap:8px;align-items:start}.resume-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.resume-actions button{padding:9px 13px}
+.live-controls{display:grid;gap:12px;padding:14px;background:#f2f6f2;border-radius:12px}.live-controls label{display:block;font-size:.96rem}.live-controls input[type=range]{display:block;width:100%;margin:12px 0 4px}.live-controls label:last-child{display:flex;gap:8px;align-items:start}.resume-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.resume-actions button{padding:9px 13px}.ai-controls{display:grid;gap:8px;padding:12px;border:1px solid #b2cdbc;border-radius:12px;background:#e7f2e9}.ai-controls label:first-child{display:flex;gap:8px;align-items:center}.ai-controls small{line-height:1.5}
 #status{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.94rem;font-weight:550;margin:12px 0}
 [hidden]{display:none!important}p{margin:10px 0 18px}
 </style>
 </head>
 <body><main>
-<header>◉ &nbsp; Saring Suara <small>Fix 1.4</small></header>
+<header>◉ &nbsp; Saring Suara <small>Fix 1.5</small></header>
 <h1>Ambil suaranya.<br>Redam musiknya.</h1>
-<p>Putar video langsung dengan peredaman musik, pengaturan level dialog (-12 sampai +12 dB), dan penanda posisi otomatis jika browser refresh. Semua lokal tanpa unggah video.</p>
+<p>Putar video langsung dengan filter stereo, peredaman musik tengah, pengatur dialog −12 sampai +12 dB, dan AI DeepFilterNet3 opsional. File media tetap di perangkat.</p>
 <section>
 <label for="file">File sumber</label>
 <input id="file" type="file" accept="audio/*,video/*,.mkv,.m4a,.mov">
@@ -38,7 +38,7 @@ footer,.note,small{font-size:.88rem;color:#486157}.note{margin:8px 0;padding:10p
 <option value="instrumen">Instrumen saja · HTDemucs (berat)</option>
 </select>
 <p id="previewHint" class="note">Pratinjau langsung tanpa konversi, tanpa FFmpeg dan tanpa HTDemucs. <strong>Tidak menjamin musik hilang</strong>; hasil bergantung pada posisi suara dalam rekaman stereo. Tidak menghasilkan file ekspor.</p>
-<p id="centerHint" class="note">Pemisahan stereo ditambah estimasi latar musik yang stabil di tengah. Peredaman musik tengah bersifat eksperimental, bisa mengubah kualitas dialog, dan <strong>tidak dapat menjamin musik hilang seluruhnya tanpa AI.</strong></p>
+<p id="centerHint" class="note">Pemisahan stereo ditambah estimasi latar musik yang stabil di tengah. Peredaman musik tengah bersifat eksperimental, bisa mengubah kualitas dialog, dan <strong>tidak dapat menjamin musik hilang seluruhnya.</strong> AI dapat membantu, tetapi bukan pemisah vokal sempurna.</p>
 <p id="exportWarning" class="note" hidden>Mode ekspor RNNoise memuat FFmpeg WebAssembly. Pada iPhone, browser masih bisa menutup tab jika memori tidak cukup.</p>
 <p id="hint" class="note" hidden>HTDemucs memerlukan RAM besar dan terbukti me-refresh browser iPhone. Opsi ini tersedia untuk desktop saja.</p>
 <div id="heavyGuard" class="note" hidden>
@@ -59,5 +59,5 @@ footer,.note,small{font-size:.88rem;color:#486157}.note{margin:8px 0;padding:10p
 <progress hidden></progress>
 <div id="result"></div>
 </section>
-<footer>Fix 1.4: Simpan posisi tontonan dan pengaturan di browser; setelah refresh, pilih lagi file yang sama. Pengatur level dialog (+/- dB) bekerja setelah filter, tetapi tidak dapat menghapus musik yang tersisa. AudioWorklet tetap bekerja langsung dengan peredaman spektral stereo dan musik tengah. Tanpa mengunggah file atau memuat AI berat di iPhone. Hasil bergantung pada audio, dan pemisahan dialog dari musik tidak dijamin sempurna. Mode ekspor dan HTDemucs desktop tetap menggunakan berkas proyek Fix 1.</footer>
-</main><script src="app.js"></script></body></html>
+<footer>Fix 1.5: AI DeepFilterNet3 hanya dimuat jika diaktifkan. Model/runtime dapat memerlukan internet saat pertama dipakai; file media tetap diproses di browser, tanpa upload. Untuk sepenuhnya offline, pasang aset AI lokal lewat skrip yang disertakan. Jika AI gagal, filter biasa terus bekerja. Performa dan kualitas AI di Safari iPhone 13 belum terverifikasi. Resume dan kontrol dB dari Fix 1.4 tetap ada.</footer>
+</main><script src="ai-filter.js"></script><script src="app.js"></script></body></html>
