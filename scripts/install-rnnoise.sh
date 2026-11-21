@@ -26,6 +26,16 @@ python3 - "$RNNOISE_BACKEND" <<'PY_FIX'
 from pathlib import Path
 import sys
 path=Path(sys.argv[1]); src=path.read_text()
+# Old Emscripten glue only recognises window, importScripts, or Node.js.
+# An AudioWorklet has none of these, so it incorrectly takes the forbidden
+# "shell" environment branch. Inject a module-local `window` binding ONLY
+# in an AudioWorklet so that the existing web branch runs. The Wasm bytes
+# are supplied via loadBinary; no DOM or network access is needed here.
+shim = '''var window = typeof globalThis.window === "object" ? globalThis.window :
+    (typeof registerProcessor === "function" ? globalThis : undefined);
+'''
+if 'typeof registerProcessor === "function" ? globalThis' not in src:
+    src = shim + src
 if 'static async loadBinary(' not in src:
     marker='class Rnnoise {'
     assert marker in src and 'Module' in src, 'RNNoise source changed; refuse unsafe patch'
@@ -35,9 +45,10 @@ if 'static async loadBinary(' not in src:
         return new Rnnoise(rnnoiseModule);
     }
     """, 1)
-    path.write_text(src)
+path.write_text(src)
 assert 'static async loadBinary(' in path.read_text()
-print('RNNoise loadBinary compatibility bridge ready')
+assert 'typeof registerProcessor === "function" ? globalThis' in path.read_text()
+print('RNNoise loadBinary and Safari AudioWorklet environment bridge ready')
 PY_FIX
 mkdir -p vendor-rnnoise
 # Turn the published library into one local ESM module; no remote JS at playback.
