@@ -1,5 +1,5 @@
 
-name: Deploy Saring Suara
+name: Deploy Saring Suara + GTCRN
 
 on:
   push:
@@ -18,21 +18,47 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure Pages
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build GTCRN AI assets (local WASM, no CDN at playback)
+        run: bash scripts/install-gtcrn.sh
+
+      - name: Verify JavaScript and GTCRN integration
+        shell: bash
+        run: |
+          node --check app.js
+          node --check gtcrn-filter.js
+          node --check voice-worklet.js
+          node --test tests/fix16.test.cjs
+          node tests/resume-voice-test.cjs
+          node -e "const fs=require('node:fs');if(!WebAssembly.validate(fs.readFileSync('vendor-gtcrn/gtcrn.wasm')))process.exit(1);"
+          test -s vendor-gtcrn/gtcrn.wasm
+          test -s vendor-gtcrn/gtcrn-worklet.js
+
+      - name: Prepare static website
+        run: |
+          mkdir -p "$RUNNER_TEMP/saring-site"
+          rsync -a --exclude='.git/' --exclude='.github/' --exclude='scripts/' --exclude='tests/' \
+            --exclude='*.zip' --exclude='*.md' ./ "$RUNNER_TEMP/saring-site/"
+
+      - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
       - name: Upload website
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: ${{ runner.temp }}/saring-site
 
       - name: Deploy website
         id: deployment
