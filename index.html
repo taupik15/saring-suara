@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Saring Suara · Fix 1.6</title>
+<title>Saring Suara · Fix 1.7</title>
 <style>
 *{box-sizing:border-box}body{margin:0;background:#eef2e9;color:#182d28;font:1rem/1.5 system-ui,-apple-system,sans-serif}
 main{max-width:720px;margin:auto;padding:28px 18px 60px}header{font-weight:800;letter-spacing:.04em}
@@ -21,9 +21,9 @@ footer,.note,small{font-size:.88rem;color:#486157}.note{margin:8px 0;padding:10p
 </style>
 </head>
 <body><main>
-<header>◉ &nbsp; Saring Suara <small>Fix 1.6</small></header>
+<header>◉ &nbsp; Saring Suara <small>Fix 1.7</small></header>
 <h1>Ambil suaranya.<br>Redam musiknya.</h1>
-<p>Putar video langsung dengan filter stereo, peredaman musik tengah, pengatur dialog −12 sampai +12 dB, dan AI GTCRN opsional untuk penjernihan dialog. File media tetap di perangkat.</p>
+<p>Putar video langsung dengan filter stereo, peredaman musik tengah, pengatur dialog −12 sampai +12 dB, AI GTCRN opsional, dan RNNoise real-time pada video. File media tetap di perangkat.</p>
 <section>
 <label for="file">File sumber</label>
 <input id="file" type="file" accept="audio/*,video/*,.mkv,.m4a,.mov">
@@ -32,13 +32,14 @@ footer,.note,small{font-size:.88rem;color:#486157}.note{margin:8px 0;padding:10p
 <label for="stem">Pilih mode</label>
 <select id="stem">
 <option value="center-live">Fokus suara stereo · langsung diputar (tanpa FFmpeg)</option>
+<option value="rnnoise-live">RNNoise langsung · video + audio real-time</option>
 <option value="dialog-preview">Dialog ringan · EQ saja</option>
 <option value="dialog-export">Dialog RNNoise · ekspor (FFmpeg)</option>
 <option value="vokal">Vokal lagu · HTDemucs (berat)</option>
 <option value="instrumen">Instrumen saja · HTDemucs (berat)</option>
 </select>
 <p id="previewHint" class="note">Pratinjau langsung tanpa konversi, tanpa FFmpeg dan tanpa HTDemucs. <strong>Tidak menjamin musik hilang</strong>; hasil bergantung pada posisi suara dalam rekaman stereo. Tidak menghasilkan file ekspor.</p>
-<p id="centerHint" class="note">Pemisahan stereo ditambah estimasi latar musik yang stabil di tengah. Peredaman musik tengah bersifat eksperimental, bisa mengubah kualitas dialog, dan <strong>tidak dapat menjamin musik hilang seluruhnya.</strong> AI GTCRN dapat membantu membersihkan noise, tetapi bukan pemisah musik dan dapat mengubah timbre suara.</p>
+<p id="centerHint" class="note">Pemisahan stereo ditambah estimasi latar musik yang stabil di tengah. Peredaman musik tengah bersifat eksperimental, bisa mengubah kualitas dialog, dan <strong>tidak dapat menjamin musik hilang seluruhnya.</strong> GTCRN atau RNNoise dapat membantu membersihkan noise secara real-time, tetapi bukan pemisah musik dan dapat mengubah warna suara.</p>
 <p id="exportWarning" class="note" hidden>Mode ekspor RNNoise memuat FFmpeg WebAssembly. Pada iPhone, browser masih bisa menutup tab jika memori tidak cukup.</p>
 <p id="hint" class="note" hidden>HTDemucs memerlukan RAM besar dan terbukti me-refresh browser iPhone. Opsi ini tersedia untuk desktop saja.</p>
 <div id="heavyGuard" class="note" hidden>
@@ -59,5 +60,5 @@ footer,.note,small{font-size:.88rem;color:#486157}.note{margin:8px 0;padding:10p
 <progress hidden></progress>
 <div id="result"></div>
 </section>
-<footer>Fix 1.6: GTCRN opsional via WebAssembly lokal. Model dipaketkan saat deployment GitHub Actions, tanpa CDN runtime saat pemutaran. Peredaman musik memakai filter stereo sebelumnya; AI hanya untuk meningkatkan kejernihan. Kualitas dan performa Safari iPhone 13 perlu diuji. Resume dan kontrol dB tetap ada.</footer>
-</main><script src="gtcrn-filter.js"></script><script src="app.js"></script></body></html>
+<footer>Fix 1.7: GTCRN dan RNNoise live opsional via WebAssembly lokal. Aset model dipaketkan saat deployment GitHub Actions, tanpa CDN saat pemutaran. Peredaman musik memakai filter stereo sebelumnya; AI hanya untuk meningkatkan kejernihan. Kualitas dan performa Safari iPhone 13 perlu diuji. Resume dan kontrol dB tetap ada.</footer>
+</main><script src="gtcrn-filter.js"></script><script src="rnnoise-filter.js"></script><script src="app.js"></script></body></html>

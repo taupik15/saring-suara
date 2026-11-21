@@ -5,7 +5,7 @@ const file=$('file'), run=$('run'), cancel=$('cancel'), result=$('result');
 const bar=document.querySelector('progress');
 const isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||
   (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
-let activeWorker=null, rejectActive=null, currentURL=null, audioContext=null, centerNode=null, aiController=null, generation=0, running=false;
+let activeWorker=null, rejectActive=null, currentURL=null, audioContext=null, centerNode=null, aiController=null, rnnoiseController=null, generation=0, running=false;
 let detachPlayback=null;
 const stateKey='saring-suara-fix1-last-stage';
 
@@ -24,7 +24,8 @@ function savedControls() {
   return {stereo:clampNumber(s.stereo,0,100,85),
     center:clampNumber(s.center,0,100,35),
     vocal:clampNumber(s.vocal,-12,12,4),
-    gtcrnMix:clampNumber(s.gtcrnMix,0,100,25)};
+    gtcrnMix:clampNumber(s.gtcrnMix,0,100,25),
+    rnnoiseMix:clampNumber(s.rnnoiseMix,0,100,25)};
 }
 function saveControls(values) {
   try {localStorage.setItem(settingsKey,JSON.stringify(values));} catch (_) {}
@@ -134,6 +135,7 @@ function showStage(message,phase,progress) {
   if (Number.isFinite(progress)) {bar.hidden=false;bar.max=1;bar.value=Math.max(0,Math.min(1,progress));}
 }
 function clearResult() {
+  if(rnnoiseController){try{rnnoiseController.destroy();}catch(_){}rnnoiseController=null;}
   if(aiController){try{aiController.destroy();}catch(_){}aiController=null;}
   if(detachPlayback)detachPlayback();
   if(centerNode){try{centerNode.disconnect();centerNode.port.onmessage=null;}catch(_){}centerNode=null;}
@@ -162,9 +164,9 @@ function updateMode() {
   if(currentURL&&!running) clearResult();
   const stem=$('stem').value;
   const song=stem==='vokal'||stem==='instrumen';
-  const preview=stem==='dialog-preview'||stem==='center-live';
-  $('dialogOptions').hidden=song||stem==='center-live';
-  $('centerHint').hidden=stem!=='center-live';
+  const preview=stem==='dialog-preview'||stem==='center-live'||stem==='rnnoise-live';
+  $('dialogOptions').hidden=song||stem==='center-live'||stem==='rnnoise-live';
+  $('centerHint').hidden=stem!=='center-live'&&stem!=='rnnoise-live';
   $('hint').hidden=!song;
   $('modeOptions').hidden=preview;
   $('previewHint').hidden=!preview;
@@ -309,14 +311,14 @@ function startPreview(source,centered) {
 // Real-time stereo mid/side spectral masking via a dedicated AudioWorklet.
 // This targets music spread across stereo channels; it is not an AI separator.
 // No giant model, no FFmpeg and no full-file conversion are involved.
-async function startCenterPreview(source){
+async function startCenterPreview(source,autoRNNoise=false){
   clearResult();
   currentURL=URL.createObjectURL(source);
   const player=document.createElement(isVideo(source)?'video':'audio');
   player.controls=true;player.playsInline=true;player.preload='metadata';
   player.src=currentURL;
   const note=document.createElement('p');note.className='note';
-  note.textContent='Filter stereo dan penekan musik tengah adaptif berjalan saat video diputar. Ini bukan AI: musik yang bercampur dengan dialog tetap dapat terdengar.';
+  note.textContent=autoRNNoise ? 'Video diputar langsung dengan filter stereo dan RNNoise-WASM opsional. RNNoise menekan noise, bukan menjamin musik hilang.' : 'Filter stereo dan penekan musik tengah adaptif berjalan saat video diputar. Ini bukan AI: musik yang bercampur dengan dialog tetap dapat terdengar.';
   const controls=document.createElement('div');controls.className='live-controls';
   const defaults=savedControls();
   const text=document.createElement('label');text.textContent='Kekuatan peredaman stereo: ';
@@ -362,7 +364,21 @@ async function startCenterPreview(source){
   const aiStatus=document.createElement('small');aiStatus.setAttribute('role','status');
   aiStatus.textContent='AI mati secara default. Hasil AI dicampur dengan suara filter sebelumnya; penghilangan musik tidak dijamin.';
   aiSection.append(aiLabel,aiStrengthLabel,aiStatus);
-  controls.append(text,centerText,centerCaution,vocalText,vocalNote,compare,aiSection);
+  // Separate real-time RNNoise control: processes the audio track as the video plays.
+  const rnSection=document.createElement('div');rnSection.className='ai-controls';
+  const rnLabel=document.createElement('label');
+  const rnSwitch=document.createElement('input');rnSwitch.type='checkbox';rnSwitch.id='rnnoiseEnabled';
+  rnLabel.append(rnSwitch,document.createTextNode(' RNNoise langsung · video tetap berjalan'));
+  const rnMixLabel=document.createElement('label');
+  rnMixLabel.textContent='Campuran RNNoise (0% = hasil filter sebelum RNNoise): ';
+  const rnMix=document.createElement('input');rnMix.type='range';rnMix.min='0';rnMix.max='100';rnMix.step='5';
+  rnMix.value=String(defaults.rnnoiseMix);
+  const rnPercent=document.createElement('span');rnPercent.textContent=defaults.rnnoiseMix+'%';
+  rnMixLabel.append(rnMix,rnPercent);rnMixLabel.hidden=!autoRNNoise;
+  const rnStatus=document.createElement('small');rnStatus.setAttribute('role','status');
+  rnStatus.textContent='RNNoise real-time mati. Tidak memakai FFmpeg atau mengekspor seluruh audio.';
+  rnSection.append(rnLabel,rnMixLabel,rnStatus);
+  controls.append(text,centerText,centerCaution,vocalText,vocalNote,compare,aiSection,rnSection);
   result.append(player,note,controls);
   const hasResume=attachPlayback(player,source,'center-live',result);
   player.addEventListener('error',()=>{$('status').textContent='Codec file tidak didukung iPhone. Coba video MP4/H.264/AAC.';});
@@ -387,7 +403,7 @@ async function startCenterPreview(source){
     voiceGain.gain.setTargetAtTime(original.checked?1:Math.pow(10,db/20),ctx.currentTime,0.025);
     presence.gain.setTargetAtTime(original.checked?2:2+db/4,ctx.currentTime,0.025);
   };
-  const persistControls=()=>saveControls({stereo:Number(strength.value),center:Number(centerStrength.value),vocal:Number(vocalBoost.value),gtcrnMix:Number(aiStrength.value)});
+  const persistControls=()=>saveControls({stereo:Number(strength.value),center:Number(centerStrength.value),vocal:Number(vocalBoost.value),gtcrnMix:Number(aiStrength.value),rnnoiseMix:Number(rnMix.value)});
   sourceNode.connect(highpass);highpass.connect(lowpass);lowpass.connect(presence);
   presence.connect(compressor);compressor.connect(voiceGain);voiceGain.connect(limiter);limiter.connect(ctx.destination);
   if(window.SaringAI){
@@ -399,6 +415,10 @@ async function startCenterPreview(source){
     aiController.setLevel(defaults.gtcrnMix);
     aiSwitch.onchange=()=>{
       if(audioContext!==ctx)return;
+      if(aiSwitch.checked&&rnSwitch.checked){
+        rnSwitch.checked=false;rnMixLabel.hidden=true;
+        rnnoiseController?.enable(false); // Never run two speech denoisers in series.
+      }
       aiStrengthLabel.hidden=!aiSwitch.checked;
       aiController?.enable(aiSwitch.checked);
     };
@@ -407,7 +427,33 @@ async function startCenterPreview(source){
       aiController?.setLevel(Number(aiStrength.value));
     };
   }else {aiSwitch.disabled=true;aiStatus.textContent='Modul GTCRN tidak tersedia; filter stereo tetap berjalan.';}
+  if(window.SaringRNNoise){
+    rnnoiseController=window.SaringRNNoise.create({
+      context:ctx,upstream:compressor,downstream:voiceGain,
+      onStatus:message=>{if(audioContext===ctx)rnStatus.textContent=message;},
+      onFailure:()=>{if(audioContext===ctx){rnSwitch.checked=false;rnMixLabel.hidden=true;}}
+    });
+    rnnoiseController.setLevel(defaults.rnnoiseMix);
+    rnSwitch.onchange=()=>{
+      if(audioContext!==ctx)return;
+      if(rnSwitch.checked&&aiSwitch.checked){
+        aiSwitch.checked=false;aiStrengthLabel.hidden=true;
+        aiController?.enable(false);
+      }
+      rnMixLabel.hidden=!rnSwitch.checked;
+      rnnoiseController?.enable(rnSwitch.checked);
+    };
+    rnMix.oninput=()=>{
+      rnPercent.textContent=rnMix.value+'%';persistControls();
+      rnnoiseController?.setLevel(Number(rnMix.value));
+    };
+  }else {
+    rnSwitch.disabled=true;
+    rnStatus.textContent='Berkas rnnoise-filter.js tidak ditemukan. Filter biasa tetap tersedia.';
+  }
   applyVocalBoost();
+  if(autoRNNoise&&rnnoiseController){rnSwitch.checked=true;rnnoiseController.enable(true);}
+
   // Wire controls before asynchronous AudioWorklet load, avoiding lost slider input.
   strength.oninput=()=>{
     percent.textContent=strength.value+'%';persistControls();
@@ -438,8 +484,17 @@ async function startCenterPreview(source){
     };
     node.port.postMessage({type:'strength',value:Number(strength.value)/100});
     node.port.postMessage({type:'centerStrength',value:Number(centerStrength.value)/100});
-    player.addEventListener('seeking',()=>{node.port.postMessage({type:'resetEstimator'});aiController?.reset?.();});
-    original.onchange=()=>{node.port.postMessage({type:'bypass',value:original.checked});applyVocalBoost();};
+    player.addEventListener('seeking',()=>{node.port.postMessage({type:'resetEstimator'});aiController?.reset?.();rnnoiseController?.reset?.();});
+    original.onchange=()=>{
+      if(original.checked){
+        // Compare without an active neural filter; never claim the original
+        // if RNNoise/GTCRN is still altering it.
+        aiController?.enable(false);rnnoiseController?.enable(false);
+        aiSwitch.checked=false;rnSwitch.checked=false;
+        aiStrengthLabel.hidden=true;rnMixLabel.hidden=true;
+      }
+      node.port.postMessage({type:'bypass',value:original.checked});applyVocalBoost();
+    };
     // Swap graph atomically: no two audible paths in parallel.
     sourceNode.disconnect();
     sourceNode.connect(node);node.connect(highpass);
@@ -468,8 +523,8 @@ run.addEventListener('click',()=>{
     $('status').textContent='HTDemucs tidak dijalankan di iPhone karena terbukti membuat tab refresh. Gunakan Pemisahan pusat stereo atau komputer untuk HTDemucs.';
     return;
   }
-  if(stem==='center-live') {
-    startCenterPreview(source).catch(e=>{$('status').textContent='Pratinjau gagal: '+e.message;});
+  if(stem==='center-live'||stem==='rnnoise-live') {
+    startCenterPreview(source,stem==='rnnoise-live').catch(e=>{$('status').textContent='Pratinjau gagal: '+e.message;});
     return;
   }
   if(stem==='dialog-preview') {
