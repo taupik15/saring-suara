@@ -1,0 +1,59 @@
+
+name: Install Saring Suara AI Assets
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'scripts/install-ai-vendor.sh'
+      - '.github/workflows/install-saring-ai.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  vendor-ai:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Bundle AI runtime and download model
+        run: bash scripts/install-ai-vendor.sh
+
+      - name: Verify assets and code
+        shell: bash
+        run: |
+          node --check ai-filter.js
+          node --check app.js
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path('vendor-ai/manifest.json').read_text())
+          base=Path('vendor-ai')/m['version']
+          assert Path('vendor-ai/dfn3.bundle.js').stat().st_size > 3000
+          assert (base/'pkg/df_bg.wasm').read_bytes()[:4] == b'\0asm'
+          assert (base/'models/DeepFilterNet3_onnx.tar.gz').read_bytes()[:2] == b'\x1f\x8b'
+          print('AI files OK')
+          PY
+
+      - name: Commit vendor assets to main branch
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add vendor-ai
+          if git diff --cached --quiet; then
+            echo 'Already up-to-date'
+          else
+            git commit -m 'Install self-hosted DeepFilterNet3 AI model'
+            git push origin HEAD:main
+          fi
