@@ -5,7 +5,7 @@ const file=$('file'), run=$('run'), cancel=$('cancel'), result=$('result');
 const bar=document.querySelector('progress');
 const isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||
   (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
-let activeWorker=null, rejectActive=null, currentURL=null, audioContext=null, centerNode=null, aiController=null, rnnoiseController=null, generation=0, running=false;
+let activeWorker=null, rejectActive=null, currentURL=null, audioContext=null, centerNode=null, aiController=null, rnnoiseController=null, speechGate=null, generation=0, running=false;
 let detachPlayback=null;
 const stateKey='saring-suara-fix1-last-stage';
 
@@ -13,6 +13,7 @@ const stateKey='saring-suara-fix1-last-stage';
 // Browsers cannot automatically re-open a local file after a reload.
 const playbackKey='saring-suara-playback-fix13';
 const settingsKey='saring-suara-controls-fix13';
+const gateSettingsKey='saring-suara-gate-fix18';
 function jsonFromStorage(key) {
   try {return JSON.parse(localStorage.getItem(key)||'null');} catch (_) {return null;}
 }
@@ -135,6 +136,7 @@ function showStage(message,phase,progress) {
   if (Number.isFinite(progress)) {bar.hidden=false;bar.max=1;bar.value=Math.max(0,Math.min(1,progress));}
 }
 function clearResult() {
+  if(speechGate){try{speechGate.node.disconnect();speechGate.node.port?.close?.();}catch(_){}speechGate=null;}
   if(rnnoiseController){try{rnnoiseController.destroy();}catch(_){}rnnoiseController=null;}
   if(aiController){try{aiController.destroy();}catch(_){}aiController=null;}
   if(detachPlayback)detachPlayback();
@@ -378,7 +380,14 @@ async function startCenterPreview(source,autoRNNoise=false){
   const rnStatus=document.createElement('small');rnStatus.setAttribute('role','status');
   rnStatus.textContent='RNNoise real-time mati. Tidak memakai FFmpeg atau mengekspor seluruh audio.';
   rnSection.append(rnLabel,rnMixLabel,rnStatus);
-  controls.append(text,centerText,centerCaution,vocalText,vocalNote,compare,aiSection,rnSection);
+  // Gate is independent of RNNoise's VAD. The current RNNoise wrapper does not expose VAD scores.
+  const gateSection=document.createElement('div');gateSection.className='ai-controls';
+  const gateTitle=document.createElement('strong');gateTitle.textContent='Gerbang suara adaptif · eksperimental';
+  const gateInfo=document.createElement('small');gateInfo.setAttribute('role','status');
+  gateInfo.textContent='Mengatur jeda dialog berdasarkan perubahan energi suara, bukan deteksi AI RNNoise. Dimatikan secara default.';
+  const gateMount=document.createElement('div');
+  gateSection.append(gateTitle,gateInfo,gateMount);
+  controls.append(text,centerText,centerCaution,vocalText,vocalNote,compare,aiSection,rnSection,gateSection);
   result.append(player,note,controls);
   const hasResume=attachPlayback(player,source,'center-live',result);
   player.addEventListener('error',()=>{$('status').textContent='Codec file tidak didukung iPhone. Coba video MP4/H.264/AAC.';});
@@ -406,6 +415,39 @@ async function startCenterPreview(source,autoRNNoise=false){
   const persistControls=()=>saveControls({stereo:Number(strength.value),center:Number(centerStrength.value),vocal:Number(vocalBoost.value),gtcrnMix:Number(aiStrength.value),rnnoiseMix:Number(rnMix.value)});
   sourceNode.connect(highpass);highpass.connect(lowpass);lowpass.connect(presence);
   presence.connect(compressor);compressor.connect(voiceGain);voiceGain.connect(limiter);limiter.connect(ctx.destination);
+  // Insert speech gate AFTER either neural denoiser and vocal gain, BEFORE limiter.
+  // Do not route from compressor: GTCRN/RNNoise already rewire compressor -> voiceGain.
+  async function prepareGate() {
+    if(!window.SpeechGate) {gateInfo.textContent='speech-gate.js belum dimuat. Suara tetap normal.';return;}
+    const saved=jsonFromStorage(gateSettingsKey)||{};
+    const params={enabled:false,
+      thresholdDb:clampNumber(saved.thresholdDb,3,20,8),
+      depthDb:clampNumber(saved.depthDb,-60,-6,-28),
+      holdMs:clampNumber(saved.holdMs,0,500,200),
+      releaseMs:clampNumber(saved.releaseMs,20,500,150)};
+    const created=await window.SpeechGate.create(ctx,params);
+    if(audioContext!==ctx) {
+      try{created.node.disconnect();created.node.port?.close?.();}catch(_){}return;
+    }
+    if(!created.supported) {
+      gateInfo.textContent='Gerbang tidak didukung oleh Safari ini. Filter stereo tetap normal.';
+      return;
+    }
+    speechGate=created;
+    const setParams=created.setParams.bind(created);
+    created.setParams=updates=>{
+      setParams(updates);
+      const {thresholdDb,depthDb,holdMs,releaseMs}=created.params;
+      try{localStorage.setItem(gateSettingsKey,JSON.stringify({thresholdDb,depthDb,holdMs,releaseMs}));}catch(_){}
+    };
+    window.SpeechGate.mountControls(gateMount,created);
+    voiceGain.disconnect(limiter);
+    voiceGain.connect(created.node);
+    created.node.connect(limiter);
+    gateInfo.textContent='Gate siap. Centang untuk meredam jeda dialog. VAD RNNoise belum terhubung; deteksinya berbasis energi.';
+    player.addEventListener('seeking',()=>{try{created.node.port.postMessage({type:'reset'});}catch(_){}});
+  }
+  prepareGate().catch(error=>{if(audioContext===ctx)gateInfo.textContent='Gate tidak bisa diaktifkan: '+(error?.message||error);});
   if(window.SaringAI){
     aiController=window.SaringAI.create({
       context:ctx,upstream:compressor,downstream:voiceGain,
