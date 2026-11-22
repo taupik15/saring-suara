@@ -6,6 +6,7 @@
 'use strict';
 const FS=4096,HOP=1024,FRAMES=256,BINS=2048,RATE=44100,LENGTH=FRAMES*HOP;
 let session=null,active=false,initDone=false,backend='wasm';
+let ort=null; // ONNX Runtime ES module for the selected backend
 let gpuFallbackReason='';
 // Reuse scratch buffers: there is only one in-flight inference per worker.
 const fftRe=new Float32Array(FS),fftIm=new Float32Array(FS);
@@ -102,37 +103,45 @@ function inverseSpectrogram(data){
 function shortError(error){
   return String(error?.message||error||'unknown').replace(/\s+/g,' ').slice(0,230);
 }
-async function loadRuntime(){
-  let gpu=false;
-  gpuFallbackReason='';
-  try{
-    gpu=!!self.navigator?.gpu;
-    if(!gpu)gpuFallbackReason='navigator.gpu tidak tersedia di Web Worker Safari';
-  }catch(e){gpuFallbackReason='Pemeriksaan WebGPU gagal: '+shortError(e);}
-  if(gpu){
-    try{importScripts('./vendor-uvr/ort.webgpu.min.js');backend='webgpu';}
-    catch(e){gpu=false;gpuFallbackReason='Bundle WebGPU tidak bisa dimuat: '+shortError(e);}
+// ONNX Runtime Web 1.23.2: ES module entrypoints must be imported inside
+// a MODULE worker on Safari. The old classic Worker + script loading route
+// failed while dynamically importing the JSEP .mjs support module.
+// Keep GPU optional: when unsupported, fall back to WASM without breaking video.
+async function createOrtSession(runtime,url,provider){
+  if(!runtime?.InferenceSession || !runtime?.Tensor || !runtime?.env?.wasm){
+    throw Error('Modul ONNX Runtime tidak lengkap ('+provider+').');
   }
-  if(!gpu){importScripts('./vendor-uvr/ort.min.js');backend='wasm';}
-  if(typeof ort==='undefined')throw Error('ONNX Runtime Web gagal dimuat.');
-  ort.env.wasm.numThreads=1;
-  ort.env.wasm.proxy=false;
-  ort.env.wasm.wasmPaths=new URL('./vendor-uvr/',self.location.href).href;
-  const url=new URL('./vendor-uvr/UVR_MDXNET_9482.onnx',self.location.href).href;
-  // Only call this WebGPU if the requested WebGPU provider *actually* loads.
-  try{
-    session=await ort.InferenceSession.create(url,{
-      executionProviders:gpu?['webgpu']:['wasm'],graphOptimizationLevel:'basic'
-    });
-  }catch(err){
-    if(!gpu)throw err;
-    gpuFallbackReason='Sesi ONNX WebGPU gagal: '+shortError(err);
-    // Safari may expose WebGPU but not the required operators or memory.
-    // Preserve the existing single-thread WASM fallback.
-    importScripts('./vendor-uvr/ort.min.js');backend='wasm';
-    ort.env.wasm.numThreads=1;ort.env.wasm.proxy=false;
-    ort.env.wasm.wasmPaths=new URL('./vendor-uvr/',self.location.href).href;
-    session=await ort.InferenceSession.create(url,{executionProviders:['wasm'],graphOptimizationLevel:'basic'});
+  runtime.env.wasm.numThreads=1; // No SharedArrayBuffer on GitHub Pages.
+  runtime.env.wasm.proxy=false;
+  runtime.env.wasm.wasmPaths=new URL('./vendor-uvr/',self.location.href).href;
+  return await runtime.InferenceSession.create(url,{
+    executionProviders:[provider],graphOptimizationLevel:'basic'
+  });
+}
+async function loadRuntime(){
+  gpuFallbackReason='';
+  const modelUrl=new URL('./vendor-uvr/UVR_MDXNET_9482.onnx',self.location.href).href;
+  let hasGpu=false;
+  try {
+    hasGpu=!!self.navigator?.gpu;
+    if(!hasGpu)gpuFallbackReason='WebGPU tidak tersedia di Worker Safari';
+  }catch(error){gpuFallbackReason='Deteksi WebGPU gagal: '+shortError(error);}
+  if(hasGpu){
+    try {
+      // Same-origin static .mjs produced from a pinned npm version.
+      const candidate=await import('./vendor-uvr/ort.webgpu.min.mjs');
+      const next=await createOrtSession(candidate,modelUrl,'webgpu');
+      ort=candidate;session=next;backend='webgpu';
+    }catch(error){
+      session=null;ort=null;
+      gpuFallbackReason='WebGPU gagal: '+shortError(error);
+    }
+  }
+  if(!session){
+    // CPU-only bundle. Reduces unnecessary GPU/JSEP initialization on Safari.
+    const cpu=await import('./vendor-uvr/ort.wasm.min.mjs');
+    const next=await createOrtSession(cpu,modelUrl,'wasm');
+    ort=cpu;session=next;backend='wasm';
   }
   const meta=session.inputMetadata[session.inputNames[0]];
   const dims=meta?.dims||meta?.dimensions;

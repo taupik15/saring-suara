@@ -211,7 +211,9 @@
       tell('Memuat model UVR 9482 (~28 MB). Video dijeda agar tidak kehilangan sinkronisasi…');
       try{
         if(!ctx.audioWorklet||typeof AudioWorkletNode==='undefined'||typeof Worker==='undefined')throw Error('AudioWorklet/Worker tidak tersedia.');
-        worker=new Worker('./uvr-live-worker.js');
+        // Module Worker is required by Safari to load ONNX Runtime ES modules.
+        // No CDN is loaded during playback; files are bundled by GitHub Actions.
+        worker=new Worker('./uvr-live-worker.js',{type:'module'});
         worker.onerror=e=>{if(enabled&&token===generation)fail(Error(e.message||'Worker tidak bisa dimuat'));};
         worker.onmessage=e=>onWorker(e,token);
         await ctx.audioWorklet.addModule('./uvr-tap-worklet.js');
