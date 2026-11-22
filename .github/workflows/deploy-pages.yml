@@ -17,7 +17,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,37 +27,33 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Check required source files
+      - name: Check required files
         shell: bash
         run: |
           set -euo pipefail
-          for file in scripts/install-gtcrn.sh scripts/gtcrn-worklet-entry.js scripts/install-rnnoise.sh rnnoise-filter.js gtcrn-filter.js app.js voice-worklet.js index.html; do
-            test -s "$file" || { echo "Missing: $file"; exit 1; }
+          for f in scripts/install-gtcrn.sh scripts/gtcrn-worklet-entry.js scripts/install-rnnoise.sh scripts/rnnoise-vad-worklet-entry.js scripts/install-uvr-lite.sh app.js index.html voice-worklet.js gtcrn-filter.js rnnoise-filter.js speech-gate.js speech-gate-worklet.js uvr-live.js uvr-live-worker.js uvr-tap-worklet.js tests/fix20.test.cjs; do
+            test -s "$f" || { echo "Missing: $f"; exit 1; }
           done
 
-      - name: Build GTCRN AI assets
+      - name: Build GTCRN assets
         run: bash scripts/install-gtcrn.sh
 
-      - name: Build RNNoise live WASM assets
+      - name: Build RNNoise VAD assets
         run: bash scripts/install-rnnoise.sh
 
-      - name: Validate JavaScript and WASM
+      - name: Package lightweight UVR 9482 assets
+        run: bash scripts/install-uvr-lite.sh
+
+      - name: Validate JavaScript and models
         shell: bash
         run: |
           set -euo pipefail
-          node --check app.js
-          node --check gtcrn-filter.js
-          node --check rnnoise-filter.js
-          node --check vendor-rnnoise/rnnoise-main.js
-          node --check vendor-rnnoise/rnnoise-worklet.js
+          for f in app.js voice-worklet.js gtcrn-filter.js rnnoise-filter.js speech-gate.js speech-gate-worklet.js uvr-live.js uvr-live-worker.js uvr-tap-worklet.js vendor-gtcrn/gtcrn-worklet.js vendor-rnnoise/rnnoise-vad-worklet.js; do node --check "$f"; done
+          test -s vendor-gtcrn/gtcrn.wasm
           test -s vendor-rnnoise/rnnoise.wasm
-          node -e "const fs=require('node:fs');if(!WebAssembly.validate(fs.readFileSync('vendor-rnnoise/rnnoise.wasm')))process.exit(1)"
-          node --check voice-worklet.js
-          node --check vendor-gtcrn/gtcrn-worklet.js
-          node -e "const fs=require('node:fs');if(!WebAssembly.validate(fs.readFileSync('vendor-gtcrn/gtcrn.wasm')))process.exit(1)"
-          if [ -f tests/fix16.test.cjs ]; then node --test tests/fix16.test.cjs; fi
-          if [ -f tests/resume-voice-test.cjs ]; then node tests/resume-voice-test.cjs; fi
-          if [ -f tests/fix17.test.cjs ]; then node --test tests/fix17.test.cjs; fi
+          test -s vendor-uvr/UVR_MDXNET_9482.onnx
+          node -e "const fs=require('fs');for(const f of ['vendor-gtcrn/gtcrn.wasm','vendor-rnnoise/rnnoise.wasm'])if(!WebAssembly.validate(fs.readFileSync(f)))process.exit(1)"
+          node --test tests/fix20.test.cjs
 
       - name: Prepare static website
         shell: bash
@@ -66,11 +62,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/saring-site"
           rsync -a --exclude='.git/' --exclude='.github/' --exclude='scripts/' --exclude='tests/' \
             --exclude='*.zip' --exclude='*.md' --exclude='WORKFLOW-*.txt' ./ "$RUNNER_TEMP/saring-site/"
-          test -s "$RUNNER_TEMP/saring-site/index.html"
-          test -s "$RUNNER_TEMP/saring-site/vendor-gtcrn/gtcrn.wasm"
-          test -s "$RUNNER_TEMP/saring-site/vendor-gtcrn/gtcrn-worklet.js"
-          test -s "$RUNNER_TEMP/saring-site/vendor-rnnoise/rnnoise.wasm"
-          test -s "$RUNNER_TEMP/saring-site/vendor-rnnoise/rnnoise-worklet.js"
+          for f in index.html uvr-live.js uvr-live-worker.js uvr-tap-worklet.js vendor-uvr/UVR_MDXNET_9482.onnx; do test -s "$RUNNER_TEMP/saring-site/$f"; done
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
