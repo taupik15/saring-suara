@@ -10,7 +10,7 @@ npm install --prefix "$TMP" --no-save --ignore-scripts --no-audit --no-fund 'onn
 DIST="$TMP/node_modules/onnxruntime-web/dist"
 mkdir -p vendor-uvr
 for f in \
-  ort.min.js ort.webgpu.min.js \
+  ort.min.js ort.webgpu.min.js ort.wasm.min.mjs ort.webgpu.min.mjs \
   ort-wasm-simd-threaded.wasm ort-wasm-simd-threaded.mjs \
   ort-wasm-simd-threaded.jsep.wasm ort-wasm-simd-threaded.jsep.mjs; do
   test -s "$DIST/$f" || { echo "Missing ONNX Runtime asset $f" >&2; exit 1; }
@@ -27,6 +27,9 @@ if [ ! -s "$MODEL" ] || ! echo "$EXPECTED  $MODEL" | sha256sum --check --status;
 fi
 node --check uvr-live.js
 node --check uvr-live-worker.js
+# Validate locally served ESM scripts; the Worker imports these directly.
+node --check vendor-uvr/ort.webgpu.min.mjs
+node --check vendor-uvr/ort.wasm.min.mjs
 node --check uvr-tap-worklet.js
 cat > vendor-uvr/NOTICE.txt <<'NOTE'
 UVR_MDXNET_9482 model · UVR / Anjok07 and contributors.
@@ -42,5 +45,7 @@ p=Path('vendor-uvr')
 assert (p/'UVR_MDXNET_9482.onnx').stat().st_size > 20_000_000
 assert (p/'ort.min.js').stat().st_size > 10_000
 assert (p/'ort.webgpu.min.js').stat().st_size > 10_000
+assert (p/'ort.webgpu.min.mjs').stat().st_size > 10_000
+assert (p/'ort.wasm.min.mjs').stat().st_size > 10_000
 print('UVR assets ready; model bytes:', (p/'UVR_MDXNET_9482.onnx').stat().st_size)
 PY
