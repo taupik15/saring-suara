@@ -5,7 +5,7 @@ const file=$('file'), run=$('run'), cancel=$('cancel'), result=$('result');
 const bar=document.querySelector('progress');
 const isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||
   (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
-let activeWorker=null, rejectActive=null, currentURL=null, audioContext=null, centerNode=null, aiController=null, rnnoiseController=null, speechGate=null, generation=0, running=false;
+let activeWorker=null, rejectActive=null, currentURL=null, audioContext=null, centerNode=null, aiController=null, rnnoiseController=null, speechGate=null, uvrController=null, generation=0, running=false;
 let detachPlayback=null;
 const stateKey='saring-suara-fix1-last-stage';
 
@@ -136,6 +136,7 @@ function showStage(message,phase,progress) {
   if (Number.isFinite(progress)) {bar.hidden=false;bar.max=1;bar.value=Math.max(0,Math.min(1,progress));}
 }
 function clearResult() {
+  if(uvrController){try{uvrController.destroy();}catch(_){}uvrController=null;}
   if(speechGate){try{speechGate.node.disconnect();speechGate.node.port?.close?.();}catch(_){}speechGate=null;}
   if(rnnoiseController){try{rnnoiseController.destroy();}catch(_){}rnnoiseController=null;}
   if(aiController){try{aiController.destroy();}catch(_){}aiController=null;}
@@ -387,7 +388,8 @@ async function startCenterPreview(source,autoRNNoise=false){
   gateInfo.textContent='RNNoise live aktif → VAD AI; RNNoise mati → energi adaptif. Gate mati secara default.';
   const gateMount=document.createElement('div');
   gateSection.append(gateTitle,gateInfo,gateMount);
-  controls.append(text,centerText,centerCaution,vocalText,vocalNote,compare,aiSection,rnSection,gateSection);
+  const uvrMount=document.createElement('div');
+  controls.append(text,centerText,centerCaution,vocalText,vocalNote,compare,aiSection,rnSection,gateSection,uvrMount);
   result.append(player,note,controls);
   const hasResume=attachPlayback(player,source,'center-live',result);
   player.addEventListener('error',()=>{$('status').textContent='Codec file tidak didukung iPhone. Coba video MP4/H.264/AAC.';});
@@ -415,6 +417,19 @@ async function startCenterPreview(source,autoRNNoise=false){
   const persistControls=()=>saveControls({stereo:Number(strength.value),center:Number(centerStrength.value),vocal:Number(vocalBoost.value),gtcrnMix:Number(aiStrength.value),rnnoiseMix:Number(rnMix.value)});
   sourceNode.connect(highpass);highpass.connect(lowpass);lowpass.connect(presence);
   presence.connect(compressor);compressor.connect(voiceGain);voiceGain.connect(limiter);limiter.connect(ctx.destination);
+  // Opt-in MDX 9482. Creates a second AUDIO-ONLY reader ahead of the video.
+  // Never blocks or replaces the existing safe DSP / neural denoiser path.
+  if(window.SaringUVR){
+    try{uvrController=window.SaringUVR.create({
+      context:ctx,player,sourceUrl:currentURL,upstream:limiter,mount:uvrMount,
+      onStatus:()=>{}
+    });}
+    catch(err){uvrMount.textContent='UVR tidak siap: '+(err?.message||err);}
+  }else{
+    const warning=document.createElement('small');
+    warning.textContent='Modul UVR tidak ditemukan. Filter lama tetap aktif.';
+    uvrMount.append(warning);
+  }
   // Insert speech gate AFTER either neural denoiser and vocal gain, BEFORE limiter.
   // Do not route from compressor: GTCRN/RNNoise already rewire compressor -> voiceGain.
   async function prepareGate() {
