@@ -8,7 +8,10 @@
 'use strict';
 (() => {
   const CHUNK=256*1024/44100;
-  const MAX_RTF=1.15; // Auto-fallback if each UVR chunk takes too long.
+  const MAX_RTF=1.15; // Warn when inference is slower than real time.
+  const HARD_RTF=2.5; // Stop immediately if the AI is dramatically too slow.
+  const MAX_MISSED=3; // Bound wasted CPU work and heat on slow iPhones.
+  const MAX_SLOW=2; // Sustained slow inference cannot stream indefinitely.
   const MIX_MAX=0.45; // Protect dialogue artifacts and audio quality.
   function create({context, player, sourceUrl, upstream, mount, onStatus}) {
     const ctx=context;
@@ -18,7 +21,7 @@
     const toggle=document.createElement('input');toggle.type='checkbox';toggle.checked=false;
     label.append(toggle,document.createTextNode(' UVR 9482 · redam sisa musik (eksperimen)'));
     const details=document.createElement('small');
-    details.textContent='Model ~28 MB, potongan ~6 detik. Butuh buffer awal dan audio scanner yang bisa memutar file. Jika pemrosesan lebih lambat daripada video, otomatis kembali ke filter sebelumnya. Matikan saat iPhone terasa panas.';
+    details.textContent='Model ~28 MB, potongan ~6 detik. Memerlukan buffer awal. Blok AI yang terlambat dilewati; jika sering tertinggal, UVR dimatikan untuk melindungi iPhone. Kecepatan sebenarnya (RTF) tampil di status. Matikan jika iPhone panas.';
     const mixLabel=document.createElement('label');
     mixLabel.textContent='Campuran hasil UVR: ';
     const slider=document.createElement('input');slider.type='range';slider.min='0';slider.max='45';slider.step='5';slider.value='25';slider.disabled=true;
@@ -33,7 +36,8 @@
     let dryGain=null,wetBus=null,scannerSource=null,rewired=false;
     let startAt=0,enabled=false,busy=false,scannerStarted=false;
     let workerReady=false,streamReady=false,prepared=false,playReady=false;
-    let generation=0,scanned=0,processed=0,totalMs=0;
+    let generation=0,scanned=0,processed=0,totalMs=0,missed=0,slowStreak=0,backendName='?';
+    let recentMisses=[]; // Last eight ~6-second chunks; occasional misses should not accumulate forever.
     const segments=new Map(),sources=new Map();
     const status={get enabled(){return enabled;},get ready(){return playReady;}};
     function setStrength(){
@@ -110,6 +114,7 @@
       if(worker){try{worker.postMessage({type:'stop'});worker.terminate();}catch(_){}worker=null;}
       restorePath();
       segments.clear();armed=false;enabled=false;busy=false;workerReady=streamReady=prepared=playReady=scannerStarted=false;
+      missed=0;slowStreak=0;recentMisses=[];
       scannerButton.disabled=true;slider.disabled=true;
     }
     function disable(message){
@@ -124,8 +129,17 @@
       if(event.type!=='chunk')return;
       scanned++;
       if(busy){
-        // Do not queue up megabytes of PCM or trigger ever-growing lag.
-        fail(Error('AI tertinggal dari audio. Mode real-time tidak cukup cepat di perangkat ini'));
+        // Never queue unbounded PCM. One temporarily late chunk should not
+        // kill playback. Skip that UVR chunk and retain the original filters.
+        // Repeated misses mean the model cannot keep up on this device.
+        missed++;
+        recentMisses.push(event.index);
+        recentMisses=recentMisses.filter(index=>event.index-index<8);
+        if(recentMisses.length>=MAX_MISSED){
+          fail(Error('AI tidak cukup cepat ('+missed+' blok UVR terlewat, backend '+backendName+'). Suara kembali ke filter ringan'));
+        }else{
+          tell('UVR tertinggal sementara: '+missed+' blok dilewati. Video tetap memakai filter lama pada bagian itu.');
+        }
         return;
       }
       busy=true;
@@ -136,19 +150,25 @@
       if(token!==generation||!enabled)return;
       const m=event.data||{};
       if(m.type==='ready'){
-        workerReady=true;scannerButton.disabled=false;
-        tell('UVR siap ('+m.backend+'). Ketuk Mulai buffer UVR untuk membaca audio awal.');
+        workerReady=true;scannerButton.disabled=false;backendName=m.backend||'?';
+        tell('UVR siap ('+backendName+'). Ketuk Mulai buffer UVR untuk membaca audio awal.');
       }else if(m.type==='result'){
         busy=false;processed++;totalMs+=m.ms;
-        if(m.ms>CHUNK*1000*MAX_RTF){
-          fail(Error('Model membutuhkan '+(m.ms/1000).toFixed(1)+' dtk untuk '+CHUNK.toFixed(1)+' dtk audio'));
+        const rtf=m.ms/(CHUNK*1000);
+        if(!Number.isFinite(rtf)||rtf>HARD_RTF){
+          fail(Error('UVR '+backendName+' perlu '+(m.ms/1000).toFixed(1)+' dtk untuk '+CHUNK.toFixed(1)+' dtk audio (RTF '+rtf.toFixed(2)+'×). Tidak aman untuk real-time'));
+          return;
+        }
+        slowStreak=rtf>MAX_RTF?slowStreak+1:0;
+        if(slowStreak>=MAX_SLOW){
+          fail(Error('UVR '+backendName+' memproses '+CHUNK.toFixed(1)+' dtk audio dalam '+(m.ms/1000).toFixed(1)+' dtk (RTF '+rtf.toFixed(2)+'×). Dua blok berturut-turut terlalu lambat untuk real-time'));
           return;
         }
         segments.set(m.index,{left:new Float32Array(m.left),right:new Float32Array(m.right),rate:m.rate,duration:new Float32Array(m.left).length/m.rate});
         // Limit retained PCM to three chunks (~7MB) to avoid Safari reloads.
         for(const key of segments.keys())if(key<m.index-2)segments.delete(key);
-        if(!playReady){playReady=true;tell('UVR siap diputar: ketuk Play pada video. Pemrosesan berikutnya berjalan di depan video.');}
-        else tell('UVR aktif · '+processed+' blok diproses · '+(m.ms/1000).toFixed(1)+' dtk/blok. Jika blok berikut terlambat, filter lama tetap bekerja.');
+        if(!playReady){playReady=true;tell('UVR '+backendName+' siap diputar: blok '+CHUNK.toFixed(1)+' dtk diproses '+(m.ms/1000).toFixed(1)+' dtk (RTF '+rtf.toFixed(2)+'×). Tekan Play.');}
+        else tell('UVR '+backendName+' · '+processed+' blok diproses · RTF '+rtf.toFixed(2)+'× · '+missed+' blok terlewat. Bagian tanpa hasil AI memakai filter lama.');
         schedule();
       }else if(m.type==='skip')fail(Error('Buffer AI penuh. Pemutar kembali ke filter lama'));
       else if(m.type==='error')fail(Error(m.message||'Mesin MDX gagal'));
@@ -156,6 +176,7 @@
     async function enable(){
       if(destroyed||enabled)return;
       generation++;const token=generation;
+      missed=0;slowStreak=0;recentMisses=[];processed=0;scanned=0;totalMs=0;backendName='?';
       enabled=true;armed=true;
       player.pause();
       startAt=Math.max(0,player.currentTime||0);
