@@ -30,13 +30,17 @@
     const scannerButton=document.createElement('button');scannerButton.type='button';scannerButton.textContent='Mulai buffer UVR';scannerButton.disabled=true;
     const state=document.createElement('small');state.setAttribute('role','status');
     state.textContent='UVR mati. Video memakai filter RNNoise/GTCRN seperti biasa.';
-    ui.append(label,details,mixLabel,scannerButton,state);
+    const diagnostics=document.createElement('small');
+    diagnostics.textContent='Diagnostik UVR: belum berjalan.';
+    diagnostics.style.cssText='display:block;overflow-wrap:anywhere;font-variant-numeric:tabular-nums';
+    ui.append(label,details,mixLabel,scannerButton,state,diagnostics);
     mount.append(ui);
     let destroyed=false,armed=false,worker=null,scanner=null,tap=null;
     let dryGain=null,wetBus=null,scannerSource=null,rewired=false;
     let startAt=0,enabled=false,busy=false,scannerStarted=false;
     let workerReady=false,streamReady=false,prepared=false,playReady=false;
     let generation=0,scanned=0,processed=0,totalMs=0,missed=0,slowStreak=0,backendName='?';
+    let gpuFallbackReason='';
     let recentMisses=[]; // Last eight ~6-second chunks; occasional misses should not accumulate forever.
     const segments=new Map(),sources=new Map();
     const status={get enabled(){return enabled;},get ready(){return playReady;}};
@@ -146,15 +150,34 @@
       try{worker.postMessage({type:'chunk',index:event.index,left:event.left,right:event.right,rate:event.rate},[event.left,event.right]);}
       catch(e){fail(e);}
     }
+    function showProfile(m){
+      const t=m.timings;
+      if(!t||!Number.isFinite(t.inferenceMs)){
+        diagnostics.textContent='UVR '+backendName+': profil tiap tahap tidak tersedia.';
+        return;
+      }
+      const seconds=ms=>(ms/1000).toFixed(2)+' dtk';
+      const core=t.stftMs+t.inferenceMs+t.istftMs;
+      diagnostics.textContent='Profil UVR '+backendName+' · Resample '+seconds(t.resampleInMs+t.resampleOutMs)+
+        ' · FFT '+seconds(t.stftMs)+' · ONNX '+seconds(t.inferenceMs)+
+        ' · iFFT '+seconds(t.istftMs)+' · Total '+seconds(t.totalMs)+
+        ' · Beban ONNX '+(core>0?Math.round(t.inferenceMs/core*100):0)+'%.'+
+        (gpuFallbackReason?' GPU fallback: '+gpuFallbackReason+'.':'');
+    }
     function onWorker(event,token){
       if(token!==generation||!enabled)return;
       const m=event.data||{};
       if(m.type==='ready'){
         workerReady=true;scannerButton.disabled=false;backendName=m.backend||'?';
+        gpuFallbackReason=String(m.gpuFallbackReason||'').slice(0,230);
+        diagnostics.textContent='Backend '+backendName+
+          (gpuFallbackReason?' · Alasan WebGPU tidak aktif: '+gpuFallbackReason:' · WebGPU tersedia dan sesi ONNX berhasil')+
+          '. Profil FFT / ONNX / iFFT muncul setelah blok pertama.';
         tell('UVR siap ('+backendName+'). Ketuk Mulai buffer UVR untuk membaca audio awal.');
       }else if(m.type==='result'){
         busy=false;processed++;totalMs+=m.ms;
         const rtf=m.ms/(CHUNK*1000);
+        showProfile(m);
         if(!Number.isFinite(rtf)||rtf>HARD_RTF){
           fail(Error('UVR '+backendName+' perlu '+(m.ms/1000).toFixed(1)+' dtk untuk '+CHUNK.toFixed(1)+' dtk audio (RTF '+rtf.toFixed(2)+'×). Tidak aman untuk real-time'));
           return;
@@ -171,12 +194,17 @@
         else tell('UVR '+backendName+' · '+processed+' blok diproses · RTF '+rtf.toFixed(2)+'× · '+missed+' blok terlewat. Bagian tanpa hasil AI memakai filter lama.');
         schedule();
       }else if(m.type==='skip')fail(Error('Buffer AI penuh. Pemutar kembali ke filter lama'));
-      else if(m.type==='error')fail(Error(m.message||'Mesin MDX gagal'));
+      else if(m.type==='error'){
+        if(m.gpuFallbackReason)diagnostics.textContent='GPU fallback: '+String(m.gpuFallbackReason).slice(0,230);
+        fail(Error(m.message||'Mesin MDX gagal'));
+      }
     }
     async function enable(){
       if(destroyed||enabled)return;
       generation++;const token=generation;
       missed=0;slowStreak=0;recentMisses=[];processed=0;scanned=0;totalMs=0;backendName='?';
+      gpuFallbackReason='';
+      diagnostics.textContent='Menyiapkan diagnostik WebGPU / WASM dan profiler UVR…';
       enabled=true;armed=true;
       player.pause();
       startAt=Math.max(0,player.currentTime||0);
